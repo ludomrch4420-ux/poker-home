@@ -1,10 +1,12 @@
 {
   "name": "poker-home",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Texas Hold'em poker — Cloudflare Worker",
+  "description": "PokerHome — Texas Hold'em avec Firebase",
   "scripts": {
-    "dev": "npx wrangler dev",
-    "deploy": "npx wrangler deploy"
+    "dev": "firebase serve --only hosting,functions",
+    "deploy": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:functions": "firebase deploy --only functions"
   }
 }

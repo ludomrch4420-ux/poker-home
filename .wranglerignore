@@ -1,6 +1,0 @@
-node_modules/
-.wrangler/
-.git/
-server.js
-game/
-clients.js
