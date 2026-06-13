@@ -34,6 +34,60 @@
              style="text-transform: uppercase;" />
     </div>
 
+    <!-- Paramètres de partie (visibles uniquement en création) -->
+    <div id="settings-section">
+      <div class="divider">paramètres de la partie</div>
+
+      <div class="settings-row">
+        <div class="field-group">
+          <label for="input-sb">Petite blind</label>
+          <select id="input-sb">
+            <option value="1">1</option>
+            <option value="5" selected>5</option>
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="input-bb">Grosse blind</label>
+          <select id="input-bb">
+            <option value="2">2</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <div class="field-group">
+          <label for="input-stack">Stack de départ</label>
+          <select id="input-stack">
+            <option value="500">500</option>
+            <option value="1000" selected>1 000</option>
+            <option value="2000">2 000</option>
+            <option value="5000">5 000</option>
+            <option value="10000">10 000</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="input-timer">Timer (sec)</label>
+          <select id="input-timer">
+            <option value="10">10s</option>
+            <option value="15">15s</option>
+            <option value="20" selected>20s</option>
+            <option value="30">30s</option>
+            <option value="45">45s</option>
+            <option value="60">60s</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div style="display: flex; gap: 10px;">
       <button class="btn btn-secondary" onclick="createRoom()">Créer une salle</button>
       <button class="btn btn-primary" onclick="joinRoom()">Rejoindre</button>
@@ -56,8 +110,12 @@
       <span class="badge" id="header-players">0 joueurs</span>
       <span class="badge" id="header-phase">Attente</span>
     </div>
-    <button class="btn btn-secondary" style="width:auto; padding:6px 14px; font-size:13px;"
-            onclick="leaveGame()">Quitter</button>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button class="btn btn-gold" id="btn-start" style="width:auto; padding:6px 14px; font-size:13px; display:none;"
+              onclick="startGame()">Démarrer la partie</button>
+      <button class="btn btn-secondary" style="width:auto; padding:6px 14px; font-size:13px;"
+              onclick="leaveGame()">Quitter</button>
+    </div>
   </div>
 
   <!-- Corps -->
@@ -186,7 +244,15 @@
     const name = document.getElementById('input-name').value.trim();
     if (!name) return showToast("Entre ton pseudo d'abord.");
     state.playerName = name;
-    socket.emit('createRoom', { name });
+
+    const settings = {
+      smallBlind: parseInt(document.getElementById('input-sb').value),
+      bigBlind: parseInt(document.getElementById('input-bb').value),
+      startingStack: parseInt(document.getElementById('input-stack').value),
+      turnTimer: parseInt(document.getElementById('input-timer').value),
+    };
+
+    socket.emit('createRoom', { name, settings });
   }
 
   function joinRoom() {
@@ -195,13 +261,29 @@
     if (!name) return showToast('Entre ton pseudo.');
     if (!room) return showToast('Entre le code de salle.');
     state.playerName = name;
+
+    // Masque les paramètres côté rejoindre
+    document.getElementById('settings-section').style.display = 'none';
     socket.emit('joinRoom', { name, room });
   }
 
-  socket.on('roomJoined', ({ code, playerId, roomData }) => {
+  // Masquer les paramètres quand on clique "Rejoindre" et les montrer pour "Créer"
+  document.querySelector('.btn-secondary').addEventListener('click', () => {
+    document.getElementById('settings-section').style.display = 'block';
+  });
+
+  socket.on('roomJoined', ({ code, playerId, isHost, roomData }) => {
     state.roomCode = code;
     state.playerId = playerId;
     document.getElementById('header-room-name').textContent = 'Salle ' + code;
+    if (isHost) {
+      document.getElementById('btn-start').style.display = 'inline-block';
+    }
+    if (roomData) {
+      const sb = roomData.smallBlind || 5;
+      const bb = roomData.bigBlind || 10;
+      document.getElementById('header-blinds').textContent = 'Blinds ' + sb + ' / ' + bb;
+    }
     showScreen('game');
     showToast('Bienvenue ' + state.playerName + ' !');
     if (roomData) updateGameState(roomData);
@@ -216,6 +298,7 @@
      Démarrer la partie
   ══════════════════════════════════════════ */
   function startGame() {
+    document.getElementById('btn-start').style.display = 'none';
     socket.emit('startGame');
   }
 
@@ -272,6 +355,9 @@
     document.getElementById('pot-display').textContent = gs.pot + ' jetons';
     document.getElementById('header-players').textContent = gs.players.length + ' joueurs';
     document.getElementById('header-phase').textContent = phaseLabel(gs.phase);
+    if (gs.smallBlind !== undefined) {
+      document.getElementById('header-blinds').textContent = 'Blinds ' + gs.smallBlind + ' / ' + gs.bigBlind;
+    }
 
     renderCommunityCards(gs.communityCards);
     renderSeats(gs.players);

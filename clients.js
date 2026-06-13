@@ -10,9 +10,9 @@ const rooms = new Map();
 /**
  * Retourne ou crée une room
  */
-function getOrCreateRoom(code) {
+function getOrCreateRoom(code, settings) {
   if (!rooms.has(code)) {
-    rooms.set(code, new GameRoom(code));
+    rooms.set(code, new GameRoom(code, settings));
   }
   return rooms.get(code);
 }
@@ -40,7 +40,7 @@ function initSocketHandlers(io) {
     let currentPlayerId = socket.id;
 
     // ─── Créer une room ───────────────────────────────────
-    socket.on('createRoom', ({ name }) => {
+    socket.on('createRoom', ({ name, settings: settings_raw }) => {
       if (!name || !name.trim()) {
         socket.emit('error', { message: 'Pseudo requis' });
         return;
@@ -48,7 +48,13 @@ function initSocketHandlers(io) {
 
       // Génère un code aléatoire de 6 caractères
       const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const room = getOrCreateRoom(code);
+      const settings = {
+        smallBlind: parseInt(settings_raw.smallBlind) || 5,
+        bigBlind: parseInt(settings_raw.bigBlind) || 10,
+        startingStack: parseInt(settings_raw.startingStack) || 1000,
+        turnTimer: (parseInt(settings_raw.turnTimer) || 20) * 1000,
+      };
+      const room = getOrCreateRoom(code, settings);
 
       const result = room.addPlayer(currentPlayerId, name.trim());
       if (result.error) {
@@ -62,6 +68,7 @@ function initSocketHandlers(io) {
       socket.emit('roomJoined', {
         code,
         playerId: currentPlayerId,
+        isHost: true,
         roomData: room.getData(currentPlayerId),
       });
 

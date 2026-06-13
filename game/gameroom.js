@@ -5,23 +5,25 @@
 const { createShuffledDeck, deal } = require('./deck');
 const { evaluateHand, findWinners } = require('./hand');
 
-const SMALL_BLIND = 5;
-const BIG_BLIND = 10;
-const STARTING_STACK = 1000;
-const MAX_PLAYERS = 6;
-const TURN_TIMEOUT = 20000; // 20 secondes
+const DEFAULTS = {
+  smallBlind: 5,
+  bigBlind: 10,
+  startingStack: 1000,
+  turnTimer: 20000,
+  maxPlayers: 6,
+};
 
 /**
  * Représente un joueur dans la room
  */
-function createPlayer(id, name) {
+function createPlayer(id, name, stack) {
   return {
     id,
     name,
-    stack: STARTING_STACK,
+    stack: stack || DEFAULTS.startingStack,
     cards: [],
-    bet: 0,           // mise ce tour-ci
-    totalBet: 0,      // mise totale cette phase
+    bet: 0,
+    totalBet: 0,
     folded: false,
     allIn: false,
     isDealer: false,
@@ -32,18 +34,20 @@ function createPlayer(id, name) {
 class GameRoom {
   /**
    * @param {string} code - Code de la room
+   * @param {object} settings - Paramètres de la partie
    */
-  constructor(code) {
+  constructor(code, settings = {}) {
     this.code = code;
+    this.settings = { ...DEFAULTS, ...settings };
     this.players = [];
     this.deck = [];
     this.communityCards = [];
     this.pot = 0;
-    this.phase = 'waiting'; // waiting | preflop | flop | turn | river | showdown
+    this.phase = 'waiting';
     this.dealerIndex = -1;
     this.currentPlayerIndex = -1;
-    this.currentBet = 0;  // mise maximum actuelle
-    this.minRaise = BIG_BLIND;
+    this.currentBet = 0;
+    this.minRaise = this.settings.bigBlind;
     this.actionTimer = null;
   }
 
@@ -55,6 +59,10 @@ class GameRoom {
       code: this.code,
       phase: this.phase,
       pot: this.pot,
+      smallBlind: this.settings.smallBlind,
+      bigBlind: this.settings.bigBlind,
+      startingStack: this.settings.startingStack,
+      turnTimer: this.settings.turnTimer,
       communityCards: this.communityCards,
       currentBet: this.currentBet,
       dealerIndex: this.dealerIndex,
@@ -80,11 +88,11 @@ class GameRoom {
    * Ajoute un joueur à la room
    */
   addPlayer(id, name) {
-    if (this.players.length >= MAX_PLAYERS) return { error: 'Room pleine (max 6 joueurs)' };
+    if (this.players.length >= this.settings.maxPlayers) return { error: `Room pleine (max ${this.settings.maxPlayers} joueurs)` };
     if (this.phase !== 'waiting') return { error: 'Partie déjà en cours' };
     if (this.players.find(p => p.id === id)) return { error: 'Déjà dans la room' };
 
-    const player = createPlayer(id, name);
+    const player = createPlayer(id, name, this.settings.startingStack);
     this.players.push(player);
 
     // Le premier joueur devient dealer
@@ -152,7 +160,7 @@ class GameRoom {
     this.communityCards = [];
     this.pot = 0;
     this.currentBet = 0;
-    this.minRaise = BIG_BLIND;
+    this.minRaise = this.settings.bigBlind;
 
     for (const p of this.players) {
       p.cards = [];
@@ -176,11 +184,11 @@ class GameRoom {
     const bbIndex = (this.dealerIndex + 2) % this.players.length;
 
     // Petite blind
-    this._placeBet(this.players[sbIndex], SMALL_BLIND);
+    this._placeBet(this.players[sbIndex], this.settings.smallBlind);
     // Grosse blind
-    this._placeBet(this.players[bbIndex], BIG_BLIND);
+    this._placeBet(this.players[bbIndex], this.settings.bigBlind);
 
-    this.currentBet = BIG_BLIND;
+    this.currentBet = this.settings.bigBlind;
     this.phase = 'preflop';
 
     // Le premier à agir est celui après la grosse blind
@@ -454,7 +462,7 @@ class GameRoom {
         this.fold(p.id);
         // Les clients doivent être notifiés → c'est géré par clients.js
       }
-    }, TURN_TIMEOUT);
+    }, this.settings.turnTimer);
   }
 
   _clearTimer() {
