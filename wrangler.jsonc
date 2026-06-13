@@ -1,5 +1,6 @@
-{
-  "name": "poker-home",
-  "compatibility_date": "2026-06-13",
-  "pages_build_output_dir": "./public"
-}
+name = "poker-home"
+main = "src/index.js"
+compatibility_date = "2026-06-13"
+
+[site]
+bucket = "./public"

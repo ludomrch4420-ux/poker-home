@@ -5,11 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PokerHome — Joue avec tes amis</title>
   <link rel="stylesheet" href="style.css" />
-  <script>
-    // URL du backend Socket.IO (par défaut: même origine)
-    window.SERVER_URL = window.location.origin;
-  </script>
-  <script src="/socket.io/socket.io.js"></script>
+
+
 
 <!-- ═══════════════════════════════════════════════
      ÉCRAN 1 : LOBBY
@@ -207,9 +204,61 @@
 <script>
 
   /* ══════════════════════════════════════════
-     Socket.IO — Connexion au serveur
+     WebSocket — Connexion au Worker
   ══════════════════════════════════════════ */
-  const socket = io();
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${protocol}//${location.host}/`);
+
+  ws.onopen = () => { console.log('Connecté au serveur'); };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    const type = data.type;
+
+    if (type === 'error') {
+      showToast('Erreur : ' + data.message);
+    } else if (type === 'roomJoined') {
+      state.roomCode = data.code;
+      state.playerId = data.playerId;
+      document.getElementById('header-room-name').textContent = 'Salle ' + data.code;
+      if (data.isHost) {
+        document.getElementById('btn-start').style.display = 'inline-block';
+      }
+      if (data.roomData) {
+        const sb = data.roomData.smallBlind || 5;
+        const bb = data.roomData.bigBlind || 10;
+        document.getElementById('header-blinds').textContent = 'Blinds ' + sb + ' / ' + bb;
+      }
+      showScreen('game');
+      showToast('Bienvenue ' + state.playerName + ' !');
+      if (data.roomData) updateGameState(data.roomData);
+    } else if (type === 'gameState') {
+      updateGameState(data.roomData);
+    } else if (type === 'yourTurn') {
+      state.currentBet = data.currentBet;
+      document.getElementById('btn-call').textContent = 'Suivre ' + data.currentBet;
+      document.getElementById('raise-amount').value = data.minRaise || data.currentBet * 2;
+      updateTurnUI(true, 'À toi de jouer !');
+    } else if (type === 'actionLog') {
+      addLog(data.player, data.action, data.amount);
+    } else if (type === 'showdown') {
+      updateGameState(data.roomData);
+      showToast('Fin de main !');
+      const actionButtons = document.getElementById('action-buttons');
+      if (!document.getElementById('btn-next-hand')) {
+        const btn = document.createElement('button');
+        btn.id = 'btn-next-hand';
+        btn.className = 'btn btn-gold';
+        btn.textContent = 'Main suivante';
+        btn.onclick = () => { send({ type: 'nextHand' }); btn.remove(); };
+        actionButtons.appendChild(btn);
+      }
+    }
+  };
+
+  ws.onclose = () => { showToast('Déconnexion du serveur'); };
+
+  function send(data) { if (ws.readyState === 1) ws.send(JSON.stringify(data)); }
 
   const state = {
     playerName: '',
@@ -224,14 +273,6 @@
     currentBet: 0,
     myStack: 1000,
   };
-
-  socket.on('connect', () => {
-    console.log('Connecté au serveur');
-  });
-
-  socket.on('error', ({ message }) => {
-    showToast('Erreur : ' + message);
-  });
 
   /* ══════════════════════════════════════════
      Navigation entre écrans
@@ -256,7 +297,7 @@
       turnTimer: parseInt(document.getElementById('input-timer').value),
     };
 
-    socket.emit('createRoom', { name, settings });
+    send({ type: 'createRoom', name, settings });
   }
 
   function joinRoom() {
@@ -267,32 +308,15 @@
     state.playerName = name;
 
     document.getElementById('settings-section').style.display = 'none';
-    socket.emit('joinRoom', { name, room });
+    send({ type: 'joinRoom', name, room });
   }
 
   document.querySelector('.btn-secondary').addEventListener('click', () => {
     document.getElementById('settings-section').style.display = 'block';
   });
 
-  socket.on('roomJoined', ({ code, playerId, isHost, roomData }) => {
-    state.roomCode = code;
-    state.playerId = playerId;
-    document.getElementById('header-room-name').textContent = 'Salle ' + code;
-    if (isHost) {
-      document.getElementById('btn-start').style.display = 'inline-block';
-    }
-    if (roomData) {
-      const sb = roomData.smallBlind || 5;
-      const bb = roomData.bigBlind || 10;
-      document.getElementById('header-blinds').textContent = 'Blinds ' + sb + ' / ' + bb;
-    }
-    showScreen('game');
-    showToast('Bienvenue ' + state.playerName + ' !');
-    if (roomData) updateGameState(roomData);
-  });
-
   function leaveGame() {
-    socket.emit('leaveRoom');
+    send({ type: 'leaveRoom' });
     showScreen('lobby');
   }
 
@@ -301,7 +325,7 @@
   ══════════════════════════════════════════ */
   function startGame() {
     document.getElementById('btn-start').style.display = 'none';
-    socket.emit('startGame');
+    send({ type: 'startGame' });
   }
 
   /* ══════════════════════════════════════════
@@ -310,38 +334,12 @@
   function playerAction(type) {
     if (!state.myTurn) return;
     const amount = parseInt(document.getElementById('raise-amount').value) || 0;
-    socket.emit('playerAction', { type, amount });
+    send({ type: 'playerAction', action: type, amount });
     state.myTurn = false;
     updateTurnUI(false, '');
   }
 
-  socket.on('yourTurn', ({ currentBet, minRaise }) => {
-    state.currentBet = currentBet;
-    document.getElementById('btn-call').textContent = 'Suivre ' + currentBet;
-    document.getElementById('raise-amount').value = minRaise || currentBet * 2;
-    updateTurnUI(true, 'À toi de jouer !');
-  });
 
-  socket.on('actionLog', ({ player, action, amount }) => {
-    addLog(player, action, amount);
-  });
-
-  socket.on('showdown', ({ roomData }) => {
-    updateGameState(roomData);
-    showToast('Fin de main !');
-    const actionButtons = document.getElementById('action-buttons');
-    if (!document.getElementById('btn-next-hand')) {
-      const btn = document.createElement('button');
-      btn.id = 'btn-next-hand';
-      btn.className = 'btn btn-gold';
-      btn.textContent = 'Main suivante';
-      btn.onclick = () => {
-        socket.emit('nextHand');
-        btn.remove();
-      };
-      actionButtons.appendChild(btn);
-    }
-  });
 
   /* ══════════════════════════════════════════
      Mise à jour de l'état du jeu
