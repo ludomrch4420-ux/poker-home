@@ -5,10 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PokerHome — Joue avec tes amis</title>
  <link rel="stylesheet" href="style.css" />
-  <!-- Socket.IO sera ajouté à l'étape serveur -->
-  <!-- <script src="/socket.io/socket.io.js"></script> -->
+ <script src="/socket.io/socket.io.js"></script>
 
-<!-- ═══════════════════════════════════════════════
+ <!-- ═══════════════════════════════════════════════
      ÉCRAN 1 : LOBBY
 ════════════════════════════════════════════════ -->
 <div id="screen-lobby">
@@ -146,12 +145,15 @@
 <script>
 
   /* ══════════════════════════════════════════
-     État local (sera remplacé par Socket.IO)
+     Socket.IO — Connexion au serveur
   ══════════════════════════════════════════ */
+  const socket = io();
+
   const state = {
     playerName: '',
     roomCode: '',
-    phase: 'lobby',   // lobby | waiting | preflop | flop | turn | river | showdown
+    playerId: '',
+    phase: 'lobby',
     pot: 0,
     myCards: [],
     communityCards: [],
@@ -160,6 +162,14 @@
     currentBet: 0,
     myStack: 1000,
   };
+
+  socket.on('connect', () => {
+    console.log('Connecté au serveur');
+  });
+
+  socket.on('error', ({ message }) => {
+    showToast('Erreur : ' + message);
+  });
 
   /* ══════════════════════════════════════════
      Navigation entre écrans
@@ -174,17 +184,9 @@
   ══════════════════════════════════════════ */
   function createRoom() {
     const name = document.getElementById('input-name').value.trim();
-    if (!name) return showToast('Entre ton pseudo d\'abord.');
-
-    // Génère un code aléatoire 6 car
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    document.getElementById('input-room').value = code;
-
+    if (!name) return showToast("Entre ton pseudo d'abord.");
     state.playerName = name;
-    state.roomCode   = code;
-
-    // TODO : émettre socket.emit('createRoom', { name, code })
-    enterGame();
+    socket.emit('createRoom', { name });
   }
 
   function joinRoom() {
@@ -192,26 +194,29 @@
     const room = document.getElementById('input-room').value.trim().toUpperCase();
     if (!name) return showToast('Entre ton pseudo.');
     if (!room) return showToast('Entre le code de salle.');
-
     state.playerName = name;
-    state.roomCode   = room;
-
-    // TODO : socket.emit('joinRoom', { name, room })
-    enterGame();
+    socket.emit('joinRoom', { name, room });
   }
 
-  function enterGame() {
-    document.getElementById('header-room-name').textContent = 'Salle ' + state.roomCode;
+  socket.on('roomJoined', ({ code, playerId, roomData }) => {
+    state.roomCode = code;
+    state.playerId = playerId;
+    document.getElementById('header-room-name').textContent = 'Salle ' + code;
     showScreen('game');
     showToast('Bienvenue ' + state.playerName + ' !');
-
-    // Demo locale : populate quelques joueurs fictifs
-    demoPopulate();
-  }
+    if (roomData) updateGameState(roomData);
+  });
 
   function leaveGame() {
-    // TODO : socket.emit('leaveRoom')
+    socket.emit('leaveRoom');
     showScreen('lobby');
+  }
+
+  /* ══════════════════════════════════════════
+     Démarrer la partie
+  ══════════════════════════════════════════ */
+  function startGame() {
+    socket.emit('startGame');
   }
 
   /* ══════════════════════════════════════════
@@ -219,22 +224,107 @@
   ══════════════════════════════════════════ */
   function playerAction(type) {
     if (!state.myTurn) return;
-
     const amount = parseInt(document.getElementById('raise-amount').value) || 0;
-
-    const labels = {
-      fold:  'Tu t\'es couché',
-      check: 'Tu as checké',
-      call:  'Tu as suivi ' + state.currentBet,
-      raise: 'Tu as relancé à ' + amount,
-    };
-
-    addLog(state.playerName, type, amount);
-    showToast(labels[type]);
-
-    // TODO : socket.emit('playerAction', { type, amount })
+    socket.emit('playerAction', { type, amount });
     state.myTurn = false;
     updateTurnUI(false, '');
+  }
+
+  socket.on('yourTurn', ({ currentBet, minRaise }) => {
+    state.currentBet = currentBet;
+    document.getElementById('btn-call').textContent = 'Suivre ' + currentBet;
+    document.getElementById('raise-amount').value = minRaise || currentBet * 2;
+    updateTurnUI(true, 'À toi de jouer !');
+  });
+
+  socket.on('actionLog', ({ player, action, amount }) => {
+    addLog(player, action, amount);
+  });
+
+  socket.on('showdown', ({ roomData }) => {
+    updateGameState(roomData);
+    showToast('Fin de main !');
+    // Ajouter un bouton "Main suivante"
+    const actionButtons = document.getElementById('action-buttons');
+    if (!document.getElementById('btn-next-hand')) {
+      const btn = document.createElement('button');
+      btn.id = 'btn-next-hand';
+      btn.className = 'btn btn-gold';
+      btn.textContent = 'Main suivante';
+      btn.onclick = () => {
+        socket.emit('nextHand');
+        btn.remove();
+      };
+      actionButtons.appendChild(btn);
+    }
+  });
+
+  /* ══════════════════════════════════════════
+     Mise à jour de l'état du jeu
+  ══════════════════════════════════════════ */
+  function updateGameState(gs) {
+    state.pot            = gs.pot;
+    state.communityCards = gs.communityCards;
+    state.phase          = gs.phase;
+    state.players        = gs.players;
+    state.currentBet     = gs.currentBet;
+
+    document.getElementById('pot-display').textContent = gs.pot + ' jetons';
+    document.getElementById('header-players').textContent = gs.players.length + ' joueurs';
+    document.getElementById('header-phase').textContent = phaseLabel(gs.phase);
+
+    renderCommunityCards(gs.communityCards);
+    renderSeats(gs.players);
+
+    // Mettre à jour la force de la main
+    const me = gs.players.find(p => p.isMe);
+    if (me && me.cards && me.cards.length === 2 && gs.communityCards.length >= 3) {
+      const strength = evaluateHandStrength(me.cards, gs.communityCards);
+      document.getElementById('hand-strength').textContent = strength;
+    } else {
+      document.getElementById('hand-strength').textContent = '—';
+    }
+  }
+
+  socket.on('gameState', (roomData) => {
+    updateGameState(roomData);
+  });
+
+  function phaseLabel(phase) {
+    const labels = {
+      waiting: 'Attente',
+      preflop: 'Pré-flop',
+      flop: 'Flop',
+      turn: 'Turn',
+      river: 'River',
+      showdown: 'Showdown',
+    };
+    return labels[phase] || phase;
+  }
+
+  /* ══════════════════════════════════════════
+     Évaluation simplifiée de la main (côté client)
+  ══════════════════════════════════════════ */
+  function evaluateHandStrength(holeCards, communityCards) {
+    const all = [...holeCards, ...communityCards];
+    const RANK_VALUES = { '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13,'A':14 };
+
+    const counts = {};
+    for (const c of all) {
+      const v = RANK_VALUES[c.rank] || 0;
+      counts[v] = (counts[v] || 0) + 1;
+    }
+
+    const pairs = Object.values(counts).filter(c => c === 2).length;
+    const trips = Object.values(counts).filter(c => c === 3).length;
+    const quads = Object.values(counts).filter(c => c === 4).length;
+
+    if (quads) return 'Carré';
+    if (trips && pairs) return 'Full';
+    if (trips) return 'Brelan';
+    if (pairs === 2) return 'Double paire';
+    if (pairs === 1) return 'Paire';
+    return 'Carte haute';
   }
 
   /* ══════════════════════════════════════════
@@ -275,7 +365,8 @@
       seat.dataset.pos = pos;
 
       const initials = p.name.substring(0, 2).toUpperCase();
-      const avatarClass = ['avatar', p.isTurn ? 'is-turn' : '', p.folded ? 'folded' : ''].join(' ');
+      const isMyTurn = p.isMyTurn || false;
+      const avatarClass = ['avatar', isMyTurn ? 'is-turn' : '', p.folded ? 'folded' : ''].join(' ');
 
       const dealerBtn = p.isDealer ? '<div class="dealer-chip">D</div>' : '';
 
@@ -332,13 +423,12 @@
   function updateTurnUI(isMyTurn, sub) {
     state.myTurn = isMyTurn;
     document.getElementById('turn-label').textContent = isMyTurn
-      ? 'C\'est ton tour !'
+      ? "C'est ton tour !"
       : 'En attente…';
     document.getElementById('turn-sub').textContent = sub || '';
     document.getElementById('action-buttons').style.opacity = isMyTurn ? '1' : '0.4';
     document.getElementById('action-buttons').style.pointerEvents = isMyTurn ? 'auto' : 'none';
 
-    // Timer visuel
     const fill = document.getElementById('timer-fill');
     if (isMyTurn) {
       fill.style.transition = 'none';
@@ -363,81 +453,6 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
   }
-
-  /* ══════════════════════════════════════════
-     DÉMO — données fictives pour voir la table
-     (sera remplacé par les événements Socket.IO)
-  ══════════════════════════════════════════ */
-  function demoPopulate() {
-    state.players = [
-      { name: 'Thomas', isMe: true,  isDealer: true,  isTurn: true,  folded: false, stack: 1450, bet: 40,  cards: [{rank:'K',suit:'♣'},{rank:'K',suit:'♥'}] },
-      { name: 'Marie-L.',  isMe: false, isDealer: false, isTurn: false, folded: false, stack: 980,  bet: 0,   cards: [{rank:'?',suit:'?'},{rank:'?',suit:'?'}] },
-      { name: 'Jean-B.',   isMe: false, isDealer: false, isTurn: false, folded: false, stack: 2100, bet: 80,  cards: [{rank:'?',suit:'?'},{rank:'?',suit:'?'}] },
-      { name: 'Sara',      isMe: false, isDealer: false, isTurn: false, folded: true,  stack: 620,  bet: 0,   cards: [] },
-      { name: 'Pierre',    isMe: false, isDealer: false, isTurn: false, folded: false, stack: 1750, bet: 40,  cards: [{rank:'?',suit:'?'},{rank:'?',suit:'?'}] },
-    ];
-
-    state.communityCards = [
-      { rank: 'A', suit: '♥' },
-      { rank: 'K', suit: '♠' },
-      { rank: '7', suit: '♦' },
-    ];
-
-    state.pot = 240;
-
-    document.getElementById('pot-display').textContent = state.pot + ' jetons';
-    document.getElementById('header-players').textContent = state.players.length + ' joueurs';
-    document.getElementById('header-phase').textContent = 'Flop';
-    document.getElementById('hand-strength').textContent = 'Brelan de Rois';
-
-    renderCommunityCards(state.communityCards);
-    renderSeats(state.players);
-
-    addLog('Jean-B.', 'raise', 80);
-    addLog('Pierre', 'call', 40);
-    addLog('Sara', 'fold', 0);
-
-    state.currentBet = 80;
-    document.getElementById('raise-amount').value = 160;
-    document.getElementById('btn-call').textContent = 'Suivre 80';
-    updateTurnUI(true, 'Jean-Baptiste a relancé à 80');
-  }
-
-  /* ══════════════════════════════════════════
-     TODO : Socket.IO (Étape 3)
-  ══════════════════════════════════════════
-
-  const socket = io();
-
-  socket.on('connect', () => console.log('Connecté au serveur'));
-
-  socket.on('roomJoined', ({ room, players }) => {
-    state.players = players;
-    renderSeats(players);
-  });
-
-  socket.on('gameState', (gs) => {
-    state.pot            = gs.pot;
-    state.communityCards = gs.communityCards;
-    state.phase          = gs.phase;
-    renderCommunityCards(gs.communityCards);
-    renderSeats(gs.players);
-    document.getElementById('pot-display').textContent = gs.pot + ' jetons';
-    document.getElementById('header-phase').textContent = gs.phase;
-  });
-
-  socket.on('yourTurn', ({ currentBet }) => {
-    state.currentBet = currentBet;
-    document.getElementById('btn-call').textContent = 'Suivre ' + currentBet;
-    document.getElementById('raise-amount').value   = currentBet * 2;
-    updateTurnUI(true, 'À toi de jouer !');
-  });
-
-  socket.on('actionLog', ({ player, action, amount }) => {
-    addLog(player, action, amount);
-  });
-
-  ══════════════════════════════════════════ */
 
 </script>
 </body>
