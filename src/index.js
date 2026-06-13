@@ -2,7 +2,7 @@
  * index.js — Cloudflare Worker : PokerHome Texas Hold'em
  * 
  * Tout-en-un : WebSocket + logique de jeu + fichiers statiques
- * Format Service Worker natif Cloudflare
+ * Utilise le support WebSocket natif de Cloudflare Workers
  */
 
 // ═══════════════════════════════════════════════════════════
@@ -537,19 +537,47 @@ function cleanupRoom(code) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  WEBSOCKET HANDLER
+//  CONNECTIONS STORE
 // ═══════════════════════════════════════════════════════════
 
+const connections = new Map(); // playerId → WebSocket
 const playerRooms = new Map(); // playerId → { room, code }
 
-function handleWebSocket(request) {
-  const [client, server] = Object.values(new WebSocketPair());
-  server.accept();
+function send(ws, data) {
+  try { ws.send(JSON.stringify(data)); } catch {}
+}
 
+function broadcastToRoom(code, data, excludeId = null) {
+  const room = rooms.get(code);
+  if (!room) return;
+  for (const p of room.players) {
+    if (p.id === excludeId) continue;
+    const conn = connections.get(p.id);
+    if (conn) send(conn, data);
+  }
+}
+
+function notifyTurn(room) {
+  const p = room.players[room.currentPlayerIndex];
+  if (p) {
+    const conn = connections.get(p.id);
+    if (conn) send(conn, { type: 'yourTurn', currentBet: room.currentBet, minRaise: room.currentBet + room.minRaise });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  WEBSOCKET HANDLER (Cloudflare Workers format)
+// ═══════════════════════════════════════════════════════════
+
+function handleWebSocket(webSocket, earlyDataHeader) {
   const playerId = crypto.randomUUID();
   let currentRoom = null;
   let currentCode = null;
 
+  // Accept the WebSocket using Cloudflare's native API
+  const [client, server] = Object.values(new WebSocketPair());
+  server.accept();
+  
   // Register connection
   connections.set(playerId, server);
 
@@ -605,7 +633,7 @@ function handleWebSocket(request) {
         const result = currentRoom.startGame();
         if (result.error) { send(server, { type: 'error', message: result.error }); return; }
         for (const p of currentRoom.players) {
-          const conn = getConnection(p.id);
+          const conn = connections.get(p.id);
           if (conn) send(conn, { type: 'gameState', roomData: currentRoom.getData(p.id) });
         }
         notifyTurn(currentRoom);
@@ -626,7 +654,7 @@ function handleWebSocket(request) {
         if (result.error) { send(server, { type: 'error', message: result.error }); return; }
         broadcastToRoom(currentCode, { type: 'actionLog', player: result.player, action: result.action, amount: result.amount || 0 });
         for (const p of currentRoom.players) {
-          const conn = getConnection(p.id);
+          const conn = connections.get(p.id);
           if (conn) send(conn, { type: 'gameState', roomData: currentRoom.getData(p.id) });
         }
         if (currentRoom.phase === 'showdown') {
@@ -641,7 +669,7 @@ function handleWebSocket(request) {
         const result = currentRoom.nextHand();
         if (result.error) { send(server, { type: 'error', message: result.error }); return; }
         for (const p of currentRoom.players) {
-          const conn = getConnection(p.id);
+          const conn = connections.get(p.id);
           if (conn) send(conn, { type: 'gameState', roomData: currentRoom.getData(p.id) });
         }
         if (currentRoom.phase !== 'waiting') { notifyTurn(currentRoom); }
@@ -674,36 +702,11 @@ function handleWebSocket(request) {
     playerRooms.delete(playerId);
   });
 
-  return new Response(null, { status: 101, webSocket: client });
-}
-
-function send(ws, data) {
-  try { ws.send(JSON.stringify(data)); } catch {}
-}
-
-function broadcastToRoom(code, data, excludeId = null) {
-  const room = rooms.get(code);
-  if (!room) return;
-  for (const p of room.players) {
-    if (p.id === excludeId) continue;
-    const conn = getConnection(p.id);
-    if (conn) send(conn, data);
-  }
-}
-
-function notifyTurn(room) {
-  const p = room.players[room.currentPlayerIndex];
-  if (p) {
-    const conn = getConnection(p.id);
-    if (conn) send(conn, { type: 'yourTurn', currentBet: room.currentBet, minRaise: room.currentBet + room.minRaise });
-  }
-}
-
-// Store connections by playerId
-const connections = new Map();
-
-function getConnection(playerId) {
-  return connections.get(playerId) || null;
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+    headers: earlyDataHeader ? { 'sec-websocket-protocol': earlyDataHeader } : {},
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -712,16 +715,13 @@ function getConnection(playerId) {
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-
     // WebSocket upgrade
     if (request.headers.get('Upgrade') === 'websocket') {
-      return handleWebSocket(request);
+      const earlyDataHeader = request.headers.get('sec-websocket-protocol') || '';
+      return handleWebSocket(null, earlyDataHeader);
     }
 
-    // Static files are handled by [site] bucket in wrangler.jsonc
-    // But we need to serve them from the Worker for the combined approach
-    // Let's use the asset handler
+    // Static files via assets binding
     return env.ASSETS.fetch(request);
   },
 };
