@@ -110,11 +110,16 @@ class GameRoom {
   }
   removePlayer(id) {
     const idx=this.players.findIndex(p=>p.id===id); if (idx===-1) return null;
-    this.players.splice(idx,1);
+    const player = this.players[idx];
     if (this.phase==='waiting') {
+      this.players.splice(idx,1);
       if (this.players.length===0) { this.dealerIndex=-1; this.hostId=null; }
       else if (idx===this.dealerIndex||this.dealerIndex>=this.players.length) { this.dealerIndex=0; this.players[0].isDealer=true; this.hostId=this.players[0].id; }
-    } else { const player=this.players[idx]; player.folded=true; player.isConnected=false; if (this.currentPlayerIndex===idx) this.nextPlayer(); else if (this.currentPlayerIndex>idx) this.currentPlayerIndex--; }
+    } else {
+      player.folded=true; player.isConnected=false;
+      if (this.currentPlayerIndex===idx) this.nextPlayer();
+      else if (this.currentPlayerIndex>idx) this.currentPlayerIndex--;
+    }
     return this.getData();
   }
   startGame() {
@@ -221,7 +226,8 @@ async function handleAPI(request) {
       if (!name?.trim()) return error('Pseudo requis');
       if (!rc?.trim()) return error('Code requis');
       const code = rc.trim().toUpperCase();
-      const room = getOrCreateRoom(code);
+      const room = rooms.get(code);
+      if (!room) return error('Salle introuvable');
       const pid = crypto.randomUUID();
       const result = room.addPlayer(pid, name.trim());
       if (result.error) return error(result.error);

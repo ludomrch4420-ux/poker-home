@@ -271,7 +271,7 @@ class GameRoom {
       p.totalBet = 0;
     }
     this.currentBet = 0;
-    this.minRaise = BIG_BLIND;
+    this.minRaise = this.settings.bigBlind;
 
     // Vérifier combien de joueurs sont encore en jeu
     const activePlayers = this.players.filter(p => !p.folded);

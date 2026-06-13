@@ -1,8 +1,0 @@
-{
-  "name": "poker-home",
-  "main": "src/index.js",
-  "compatibility_date": "2026-06-13",
-  "assets": {
-    "directory": "./public"
-  }
-}

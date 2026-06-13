@@ -274,6 +274,7 @@
     if (data.error) return showToast('Erreur : ' + data.error);
     state.roomCode = data.code; state.playerId = data.playerId;
     document.getElementById('header-room-name').textContent = 'Salle ' + data.code;
+    document.getElementById('btn-start').style.display = data.isHost ? 'flex' : 'none';
     if (data.roomData) {
       document.getElementById('header-blinds').textContent = data.roomData.smallBlind + ' / ' + data.roomData.bigBlind;
     }

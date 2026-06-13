@@ -87,7 +87,11 @@ function initSocketHandlers(io) {
       }
 
       const code = roomCode.trim().toUpperCase();
-      const room = getOrCreateRoom(code);
+      const room = rooms.get(code);
+      if (!room) {
+        socket.emit('error', { message: 'Salle introuvable' });
+        return;
+      }
 
       const result = room.addPlayer(currentPlayerId, name.trim());
       if (result.error) {
