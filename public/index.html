@@ -204,152 +204,146 @@
 <script>
 
   /* ══════════════════════════════════════════
-     WebSocket — Connexion au Worker
+     HTTP API + Polling
   ══════════════════════════════════════════ */
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${protocol}//${location.host}/`);
-
-  ws.onopen = () => { console.log('Connecté au serveur'); };
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    const type = data.type;
-
-    if (type === 'error') {
-      showToast('Erreur : ' + data.message);
-    } else if (type === 'roomJoined') {
-      state.roomCode = data.code;
-      state.playerId = data.playerId;
-      document.getElementById('header-room-name').textContent = 'Salle ' + data.code;
-      if (data.isHost) {
-        document.getElementById('btn-start').style.display = 'inline-block';
-      }
-      if (data.roomData) {
-        const sb = data.roomData.smallBlind || 5;
-        const bb = data.roomData.bigBlind || 10;
-        document.getElementById('header-blinds').textContent = 'Blinds ' + sb + ' / ' + bb;
-      }
-      showScreen('game');
-      showToast('Bienvenue ' + state.playerName + ' !');
-      if (data.roomData) updateGameState(data.roomData);
-    } else if (type === 'gameState') {
-      updateGameState(data.roomData);
-    } else if (type === 'yourTurn') {
-      state.currentBet = data.currentBet;
-      document.getElementById('btn-call').textContent = 'Suivre ' + data.currentBet;
-      document.getElementById('raise-amount').value = data.minRaise || data.currentBet * 2;
-      updateTurnUI(true, 'À toi de jouer !');
-    } else if (type === 'actionLog') {
-      addLog(data.player, data.action, data.amount);
-    } else if (type === 'showdown') {
-      updateGameState(data.roomData);
-      showToast('Fin de main !');
-      const actionButtons = document.getElementById('action-buttons');
-      if (!document.getElementById('btn-next-hand')) {
-        const btn = document.createElement('button');
-        btn.id = 'btn-next-hand';
-        btn.className = 'btn btn-gold';
-        btn.textContent = 'Main suivante';
-        btn.onclick = () => { send({ type: 'nextHand' }); btn.remove(); };
-        actionButtons.appendChild(btn);
-      }
-    }
-  };
-
-  ws.onclose = () => { showToast('Déconnexion du serveur'); };
-
-  function send(data) { if (ws.readyState === 1) ws.send(JSON.stringify(data)); }
+  const API = path => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-player-id': state.playerId }, body: JSON.stringify({ code: state.roomCode, playerId: state.playerId, ...arguments[1] }) }).then(r => r.json());
 
   const state = {
-    playerName: '',
-    roomCode: '',
-    playerId: '',
-    phase: 'lobby',
-    pot: 0,
-    myCards: [],
-    communityCards: [],
-    players: [],
-    myTurn: false,
-    currentBet: 0,
-    myStack: 1000,
+    playerName: '', roomCode: '', playerId: '', phase: 'lobby',
+    pot: 0, myCards: [], communityCards: [], players: [],
+    myTurn: false, currentBet: 0, myStack: 1000, pollTimer: null,
   };
 
-  /* ══════════════════════════════════════════
-     Navigation entre écrans
-  ══════════════════════════════════════════ */
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
   function showScreen(name) {
     document.getElementById('screen-lobby').style.display = name === 'lobby' ? 'flex' : 'none';
-    document.getElementById('screen-game').style.display  = name === 'game'  ? 'flex' : 'none';
+    document.getElementById('screen-game').style.display = name === 'game' ? 'flex' : 'none';
   }
 
   /* ══════════════════════════════════════════
      Lobby — Créer / Rejoindre
   ══════════════════════════════════════════ */
-  function createRoom() {
+  async function createRoom() {
     const name = document.getElementById('input-name').value.trim();
     if (!name) return showToast("Entre ton pseudo d'abord.");
     state.playerName = name;
-
     const settings = {
       smallBlind: parseInt(document.getElementById('input-sb').value),
       bigBlind: parseInt(document.getElementById('input-bb').value),
       startingStack: parseInt(document.getElementById('input-stack').value),
       turnTimer: parseInt(document.getElementById('input-timer').value),
     };
-
-    send({ type: 'createRoom', name, settings });
+    const res = await fetch('/api/room', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, settings }) });
+    const data = await res.json();
+    if (data.error) return showToast('Erreur : ' + data.error);
+    state.roomCode = data.code;
+    state.playerId = data.playerId;
+    document.getElementById('header-room-name').textContent = 'Salle ' + data.code;
+    document.getElementById('btn-start').style.display = data.isHost ? 'inline-block' : 'none';
+    if (data.roomData) {
+      const sb = data.roomData.smallBlind || 5, bb = data.roomData.bigBlind || 10;
+      document.getElementById('header-blinds').textContent = 'Blinds ' + sb + ' / ' + bb;
+    }
+    showScreen('game');
+    showToast('Bienvenue ' + state.playerName + ' !');
+    if (data.roomData) updateGameState(data.roomData);
+    startPolling();
   }
 
-  function joinRoom() {
+  async function joinRoom() {
     const name = document.getElementById('input-name').value.trim();
     const room = document.getElementById('input-room').value.trim().toUpperCase();
     if (!name) return showToast('Entre ton pseudo.');
     if (!room) return showToast('Entre le code de salle.');
     state.playerName = name;
-
     document.getElementById('settings-section').style.display = 'none';
-    send({ type: 'joinRoom', name, room });
+    const res = await fetch('/api/room/join', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, room }) });
+    const data = await res.json();
+    if (data.error) return showToast('Erreur : ' + data.error);
+    state.roomCode = data.code;
+    state.playerId = data.playerId;
+    document.getElementById('header-room-name').textContent = 'Salle ' + data.code;
+    if (data.roomData) {
+      const sb = data.roomData.smallBlind || 5, bb = data.roomData.bigBlind || 10;
+      document.getElementById('header-blinds').textContent = 'Blinds ' + sb + ' / ' + bb;
+    }
+    showScreen('game');
+    showToast('Bienvenue ' + state.playerName + ' !');
+    if (data.roomData) updateGameState(data.roomData);
+    startPolling();
   }
 
   document.querySelector('.btn-secondary').addEventListener('click', () => {
     document.getElementById('settings-section').style.display = 'block';
   });
 
-  function leaveGame() {
-    send({ type: 'leaveRoom' });
+  async function leaveGame() {
+    await fetch('/api/room/leave', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code: state.roomCode, playerId: state.playerId }) });
+    stopPolling();
     showScreen('lobby');
   }
 
   /* ══════════════════════════════════════════
      Démarrer la partie
   ══════════════════════════════════════════ */
-  function startGame() {
+  async function startGame() {
     document.getElementById('btn-start').style.display = 'none';
-    send({ type: 'startGame' });
+    const res = await fetch('/api/game/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code: state.roomCode, playerId: state.playerId }) });
+    const data = await res.json();
+    if (data.error) return showToast('Erreur : ' + data.error);
+    if (data.roomData) updateGameState(data.roomData);
   }
 
   /* ══════════════════════════════════════════
      Actions du joueur
   ══════════════════════════════════════════ */
-  function playerAction(type) {
+  async function playerAction(type) {
     if (!state.myTurn) return;
     const amount = parseInt(document.getElementById('raise-amount').value) || 0;
-    send({ type: 'playerAction', action: type, amount });
     state.myTurn = false;
     updateTurnUI(false, '');
+    const res = await fetch('/api/game/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code: state.roomCode, playerId: state.playerId, action: type, amount }) });
+    const data = await res.json();
+    if (data.error) return showToast('Erreur : ' + data.error);
+    if (data.type === 'actionLog') {
+      addLog(data.player, data.action, data.amount);
+      if (data.roomData) updateGameState(data.roomData);
+    }
   }
 
+  /* ══════════════════════════════════════════
+     Polling
+  ══════════════════════════════════════════ */
+  function startPolling() {
+    stopPolling();
+    state.pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/game/state?code=${state.roomCode}&playerId=${state.playerId}`);
+        const data = await res.json();
+        if (data.roomData) updateGameState(data.roomData);
+      } catch {}
+    }, 2000);
+  }
 
+  function stopPolling() {
+    if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  }
 
   /* ══════════════════════════════════════════
      Mise à jour de l'état du jeu
   ══════════════════════════════════════════ */
   function updateGameState(gs) {
-    state.pot            = gs.pot;
+    state.pot = gs.pot;
     state.communityCards = gs.communityCards;
-    state.phase          = gs.phase;
-    state.players        = gs.players;
-    state.currentBet     = gs.currentBet;
+    state.phase = gs.phase;
+    state.players = gs.players;
+    state.currentBet = gs.currentBet;
 
     document.getElementById('pot-display').textContent = gs.pot + ' jetons';
     document.getElementById('header-players').textContent = gs.players.length + ' joueurs';
@@ -363,46 +357,51 @@
 
     const me = gs.players.find(p => p.isMe);
     if (me && me.cards && me.cards.length === 2 && gs.communityCards.length >= 3) {
-      const strength = evaluateHandStrength(me.cards, gs.communityCards);
-      document.getElementById('hand-strength').textContent = strength;
+      document.getElementById('hand-strength').textContent = evaluateHandStrength(me.cards, gs.communityCards);
     } else {
       document.getElementById('hand-strength').textContent = '—';
     }
-  }
 
-  socket.on('gameState', (roomData) => {
-    updateGameState(roomData);
-  });
-
-  function phaseLabel(phase) {
-    const labels = {
-      waiting: 'Attente',
-      preflop: 'Pré-flop',
-      flop: 'Flop',
-      turn: 'Turn',
-      river: 'River',
-      showdown: 'Showdown',
-    };
-    return labels[phase] || phase;
-  }
-
-  /* ══════════════════════════════════════════
-     Évaluation simplifiée de la main (côté client)
-  ══════════════════════════════════════════ */
-  function evaluateHandStrength(holeCards, communityCards) {
-    const all = [...holeCards, ...communityCards];
-    const RANK_VALUES = { '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13,'A':14 };
-
-    const counts = {};
-    for (const c of all) {
-      const v = RANK_VALUES[c.rank] || 0;
-      counts[v] = (counts[v] || 0) + 1;
+    // Check if it's my turn
+    if (me && gs.currentPlayerIndex !== undefined) {
+      const currentPlayer = gs.players[gs.currentPlayerIndex];
+      if (currentPlayer && currentPlayer.id === state.playerId && !state.myTurn) {
+        state.myTurn = true;
+        document.getElementById('btn-call').textContent = 'Suivre ' + gs.currentBet;
+        document.getElementById('raise-amount').value = (gs.currentBet * 2);
+        updateTurnUI(true, "C'est ton tour !");
+      }
     }
 
-    const pairs = Object.values(counts).filter(c => c === 2).length;
-    const trips = Object.values(counts).filter(c => c === 3).length;
-    const quads = Object.values(counts).filter(c => c === 4).length;
+    // Show next hand button on showdown
+    if (gs.phase === 'showdown' && !document.getElementById('btn-next-hand')) {
+      const btn = document.createElement('button');
+      btn.id = 'btn-next-hand';
+      btn.className = 'btn btn-gold';
+      btn.textContent = 'Main suivante';
+      btn.onclick = async () => {
+        const res = await fetch('/api/game/next', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code: state.roomCode }) });
+        const data = await res.json();
+        btn.remove();
+        if (data.roomData) updateGameState(data.roomData);
+      };
+      document.getElementById('action-buttons').appendChild(btn);
+    }
+  }
 
+  function phaseLabel(phase) {
+    const l = { waiting:'Attente', preflop:'Pré-flop', flop:'Flop', turn:'Turn', river:'River', showdown:'Showdown' };
+    return l[phase] || phase;
+  }
+
+  function evaluateHandStrength(hole, community) {
+    const all = [...hole, ...community];
+    const RV = { '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13,'A':14 };
+    const counts = {};
+    for (const c of all) { const v = RV[c.rank]||0; counts[v] = (counts[v]||0)+1; }
+    const pairs = Object.values(counts).filter(c=>c===2).length;
+    const trips = Object.values(counts).filter(c=>c===3).length;
+    const quads = Object.values(counts).filter(c=>c===4).length;
     if (quads) return 'Carré';
     if (trips && pairs) return 'Full';
     if (trips) return 'Brelan';
@@ -414,68 +413,49 @@
   /* ══════════════════════════════════════════
      Affichage des cartes
   ══════════════════════════════════════════ */
-  const SUITS_COLOR = { '♥': 'red', '♦': 'red', '♠': 'black', '♣': 'black' };
+  const SUITS_COLOR = { '♥':'red', '♦':'red', '♠':'black', '♣':'black' };
 
   function renderCard(el, rank, suit) {
     el.className = 'card ' + (SUITS_COLOR[suit] || 'black');
-    el.innerHTML = '<span class="rank">' + rank + '</span><span class="suit">' + suit + '</span>';
+    el.innerHTML = '<span class="rank">'+rank+'</span><span class="suit">'+suit+'</span>';
   }
 
   function renderCommunityCards(cards) {
     for (let i = 0; i < 5; i++) {
-      const el = document.getElementById('cc-' + i);
-      if (cards[i]) {
-        renderCard(el, cards[i].rank, cards[i].suit);
-      } else {
-        el.className = 'card empty';
-        el.innerHTML = '';
-      }
+      const el = document.getElementById('cc-'+i);
+      if (cards[i]) renderCard(el, cards[i].rank, cards[i].suit);
+      else { el.className = 'card empty'; el.innerHTML = ''; }
     }
   }
 
   /* ══════════════════════════════════════════
      Sièges joueurs
   ══════════════════════════════════════════ */
-  const SEAT_POSITIONS = ['bottom', 'top-left', 'top-right', 'left', 'right'];
+  const SEAT_POSITIONS = ['bottom','top-left','top-right','left','right'];
 
   function renderSeats(players) {
     const container = document.getElementById('seats-container');
     container.innerHTML = '';
-
     players.forEach((p, i) => {
-      const pos  = SEAT_POSITIONS[i] || 'bottom';
+      const pos = SEAT_POSITIONS[i] || 'bottom';
       const seat = document.createElement('div');
       seat.className = 'seat';
       seat.dataset.pos = pos;
-
-      const initials = p.name.substring(0, 2).toUpperCase();
-      const isMyTurn = p.isMyTurn || false;
-      const avatarClass = ['avatar', isMyTurn ? 'is-turn' : '', p.folded ? 'folded' : ''].join(' ');
-
+      const initials = p.name.substring(0,2).toUpperCase();
+      const avatarClass = ['avatar', p.folded?'folded':''].join(' ');
       const dealerBtn = p.isDealer ? '<div class="dealer-chip">D</div>' : '';
-
       const cardsHTML = p.isMe
-        ? p.cards.map(c => `<div class="card ${SUITS_COLOR[c.suit] || 'black'}">
-              <span class="rank">${c.rank}</span>
-              <span class="suit">${c.suit}</span>
-            </div>`).join('')
-        : (p.cards.length > 0
-            ? '<div class="card hidden"></div><div class="card hidden"></div>'
-            : '');
-
-      const betHTML = p.bet > 0
-        ? `<div class="seat-bet">${p.bet}</div>`
-        : '';
-
+        ? p.cards.map(c => `<div class="card ${SUITS_COLOR[c.suit]||'black'}"><span class="rank">${c.rank}</span><span class="suit">${c.suit}</span></div>`).join('')
+        : (p.cards.length > 0 ? '<div class="card hidden"></div><div class="card hidden"></div>' : '');
+      const betHTML = p.bet > 0 ? `<div class="seat-bet">${p.bet}</div>` : '';
       seat.innerHTML = `
-        ${p.isMe && cardsHTML ? `<div class="seat-cards">${cardsHTML}</div>` : ''}
+        ${p.isMe&&cardsHTML?`<div class="seat-cards">${cardsHTML}</div>`:''}
         <div class="${avatarClass}">${initials}${dealerBtn}</div>
-        <div class="seat-name">${p.name}${p.isMe ? ' (toi)' : ''}</div>
+        <div class="seat-name">${p.name}${p.isMe?' (toi)':''}</div>
         <div class="seat-stack">${p.stack} jetons</div>
         ${betHTML}
-        ${!p.isMe && cardsHTML ? `<div class="seat-cards">${cardsHTML}</div>` : ''}
+        ${!p.isMe&&cardsHTML?`<div class="seat-cards">${cardsHTML}</div>`:''}
       `;
-
       container.appendChild(seat);
     });
   }
@@ -484,20 +464,17 @@
      Journal d'actions
   ══════════════════════════════════════════ */
   function addLog(player, action, amount) {
-    const log   = document.getElementById('log');
-    const line  = document.createElement('div');
+    const log = document.getElementById('log');
+    const line = document.createElement('div');
     line.className = 'log-line';
-
     const actionText = {
-      fold:  '<span class="log-action-fold">se couche</span>',
+      fold: '<span class="log-action-fold">se couche</span>',
       check: 'checke',
-      call:  'suit ' + amount,
+      call: 'suit ' + amount,
       raise: '<span class="log-action-raise">relance à ' + amount + '</span>',
     }[action] || action;
-
     line.innerHTML = `<span class="log-player">${player}</span> ${actionText}`;
     log.prepend(line);
-
     if (log.children.length > 20) log.lastChild.remove();
   }
 
@@ -506,36 +483,15 @@
   ══════════════════════════════════════════ */
   function updateTurnUI(isMyTurn, sub) {
     state.myTurn = isMyTurn;
-    document.getElementById('turn-label').textContent = isMyTurn
-      ? "C'est ton tour !"
-      : 'En attente…';
+    document.getElementById('turn-label').textContent = isMyTurn ? "C'est ton tour !" : 'En attente…';
     document.getElementById('turn-sub').textContent = sub || '';
     document.getElementById('action-buttons').style.opacity = isMyTurn ? '1' : '0.4';
     document.getElementById('action-buttons').style.pointerEvents = isMyTurn ? 'auto' : 'none';
-
     const fill = document.getElementById('timer-fill');
     if (isMyTurn) {
-      fill.style.transition = 'none';
-      fill.style.width = '100%';
-      setTimeout(() => {
-        fill.style.transition = 'width 20s linear';
-        fill.style.width = '0%';
-      }, 50);
-    } else {
-      fill.style.width = '100%';
-    }
-  }
-
-  /* ══════════════════════════════════════════
-     Toast
-  ══════════════════════════════════════════ */
-  let toastTimer;
-  function showToast(msg) {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+      fill.style.transition = 'none'; fill.style.width = '100%';
+      setTimeout(() => { fill.style.transition = 'width 20s linear'; fill.style.width = '0%'; }, 50);
+    } else { fill.style.width = '100%'; }
   }
 
 </script>

@@ -1,13 +1,8 @@
-/**
- * index.js — Cloudflare Worker : PokerHome Texas Hold'em
- */
-
 // ═══════════════════════════════════════════════════════════
-//  DECK + HAND EVALUATION + GAME ROOM
+//  DECK
 // ═══════════════════════════════════════════════════════════
-
-const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-const SUITS = ['♠', '♥', '♦', '♣'];
+const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+const SUITS = ['♠','♥','♦','♣'];
 
 function createDeck() {
   const d = [];
@@ -21,7 +16,11 @@ function shuffle(d) {
 function deal(d, n) { return d.splice(0, n); }
 function createShuffledDeck() { return shuffle(createDeck()); }
 
+// ═══════════════════════════════════════════════════════════
+//  HAND EVALUATION
+// ═══════════════════════════════════════════════════════════
 const RV = { '2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13,'A':14 };
+
 function cv(c) { return RV[c.rank] || 0; }
 function countByValue(cards) {
   const m = new Map();
@@ -56,7 +55,7 @@ function evaluateHand(hole, community) {
   for (const [cnt, vals] of byCount) vals.sort((a,b) => b-a);
   const fr = isFlush(all), sr = isStraight(values);
   if (fr.is && sr.is) { const sv = fr.cards.map(cv); const ss = isStraight(sv); if (ss.is && ss.high === 14) return { rank:9, name:'Quinte flush royale', values:[14] }; if (ss.is) return { rank:8, name:'Quinte flush', values:[ss.high] }; }
-  if (byCount.has(4)) { const q = byCount.get(4)[0]; return { rank:7, name:'Carré', values:[q, values.filter(v=>v!==q).sort((a,b)=>b-a)[0] ] }; }
+  if (byCount.has(4)) { const q = byCount.get(4)[0]; const k = values.filter(v=>v!==q).sort((a,b)=>b-a)[0]; return { rank:7, name:'Carré', values:[q, k] }; }
   if (byCount.has(3) && byCount.has(2)) return { rank:6, name:'Full', values:[byCount.get(3)[0], byCount.get(2)[0]] };
   if (byCount.has(3) && byCount.get(3).length >= 2) { const t = byCount.get(3).sort((a,b)=>b-a); return { rank:6, name:'Full', values:[t[0],t[1]] }; }
   if (fr.is) return { rank:5, name:'Couleur', values:fr.cards.map(cv).sort((a,b)=>b-a).slice(0,5) };
@@ -81,7 +80,11 @@ function findWinners(players, community) {
   return ev.filter(e => compareHands(e.hand, best.hand) === 0).map(w => w.index);
 }
 
+// ═══════════════════════════════════════════════════════════
+//  GAME ROOM
+// ═══════════════════════════════════════════════════════════
 const DEFAULTS = { smallBlind:5, bigBlind:10, startingStack:1000, turnTimer:20000, maxPlayers:6 };
+
 function createPlayer(id, name, stack) {
   return { id, name, stack: stack||DEFAULTS.startingStack, cards:[], bet:0, totalBet:0, folded:false, allIn:false, isDealer:false, isConnected:true };
 }
@@ -107,12 +110,11 @@ class GameRoom {
   }
   removePlayer(id) {
     const idx=this.players.findIndex(p=>p.id===id); if (idx===-1) return null;
-    const player=this.players[idx]; this.players.splice(idx,1);
+    this.players.splice(idx,1);
     if (this.phase==='waiting') {
       if (this.players.length===0) { this.dealerIndex=-1; this.hostId=null; }
-      else if (idx===this.dealerIndex) { this.dealerIndex=0; this.players[0].isDealer=true; this.hostId=this.players[0].id; }
-      else if (this.dealerIndex>=this.players.length) { this.dealerIndex=0; this.players[0].isDealer=true; this.hostId=this.players[0].id; }
-    } else { player.folded=true; player.isConnected=false; if (this.currentPlayerIndex===idx) this.nextPlayer(); else if (this.currentPlayerIndex>idx) this.currentPlayerIndex--; }
+      else if (idx===this.dealerIndex||this.dealerIndex>=this.players.length) { this.dealerIndex=0; this.players[0].isDealer=true; this.hostId=this.players[0].id; }
+    } else { const player=this.players[idx]; player.folded=true; player.isConnected=false; if (this.currentPlayerIndex===idx) this.nextPlayer(); else if (this.currentPlayerIndex>idx) this.currentPlayerIndex--; }
     return this.getData();
   }
   startGame() {
@@ -150,7 +152,7 @@ class GameRoom {
     if (np==='flop') this.communityCards=deal(this.deck,3); else this.communityCards.push(...deal(this.deck,1));
     this.phase=np; this.currentPlayerIndex=this._firstAfterDealer(); this._skipPlayersWhoCantAct(); this._startTimer();
   }
-  _firstAfterDealer() { if (this.players.length===0) return -1; let idx=(this.dealerIndex+1)%this.players.length, looped=false; while(true) { if (!this.players[idx].folded&&!this.players[idx].allIn) return idx; idx=(idx+1)%this.players.length; if (idx===this.dealerIndex+1) { if (looped) return this.dealerIndex; looped=true; } } }
+  _firstAfterDealer() { if (this.players.length===0) return -1; let idx=(this.dealerIndex+1)%this.players.length, looped=false; while(true) { if (!this.players[idx].folded&&!this.players[idx].allIn) return idx; idx=(idx+1)%this.players.length; if (idx===(this.dealerIndex+1)) { if (looped) return this.dealerIndex; looped=true; } } }
   _showdown() { this.phase='showdown'; this._clearTimer(); const w=findWinners(this.players,this.communityCards); if (w.length===1) this.players[w[0]].stack+=this.pot; else if (w.length>1) { const s=Math.floor(this.pot/w.length); for (const i of w) this.players[i].stack+=s; } this.pot=0; }
   _declareWinner(r) { this.phase='showdown'; this._clearTimer(); if (r.length===1) r[0].stack+=this.pot; this.pot=0; }
   nextHand() {
@@ -169,122 +171,125 @@ class GameRoom {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  ROOMS + CONNECTIONS
+//  ROOMS REGISTRY
 // ═══════════════════════════════════════════════════════════
-
 const rooms = new Map();
 function getOrCreateRoom(code, settings) { if (!rooms.has(code)) rooms.set(code, new GameRoom(code, settings)); return rooms.get(code); }
 function cleanupRoom(code) { const r=rooms.get(code); if (r&&r.players.length===0) { r._clearTimer(); rooms.delete(code); } }
 
-const connections = new Map();
-function send(ws, data) { try { ws.send(JSON.stringify(data)); } catch {}
-function broadcastToRoom(code, data, excludeId=null) { const r=rooms.get(code); if (!r) return; for (const p of r.players) { if (p.id===excludeId) continue; const c=connections.get(p.id); if (c) send(c, data); } }
-function notifyTurn(room) { const p=room.players[room.currentPlayerIndex]; if (p) { const c=connections.get(p.id); if (c) send(c, {type:'yourTurn',currentBet:room.currentBet,minRaise:room.currentBet+room.minRaise}); } }
-
 // ═══════════════════════════════════════════════════════════
-//  WEBSOCKET HANDLER
+//  HTTP API HANDLER
 // ═══════════════════════════════════════════════════════════
+const json = (data, status=200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } });
+const error = (msg, status=400) => json({ error: msg }, status);
 
-export class WebSocketHandler {
-  constructor() {
-    this.connections = new Map();
-  }
+async function handleAPI(request) {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method;
 
-  handleConnection(webSocket) {
-    const playerId = crypto.randomUUID();
-    let currentRoom = null;
-    let currentCode = null;
+  // CORS preflight
+  if (method === 'OPTIONS') return new Response(null, { headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'Content-Type' } });
 
-    webSocket.accept();
-    this.connections.set(playerId, webSocket);
+  try {
+    const body = method === 'POST' ? await request.json() : {};
+    const playerId = request.headers.get('x-player-id') || '';
 
-    webSocket.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        const type = data.type;
+    // ─── CREATE ROOM ──────────────────────────────────────
+    if (path === '/api/room' && method === 'POST') {
+      const { name, settings } = body;
+      if (!name?.trim()) return error('Pseudo requis');
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const s = { smallBlind: parseInt(settings?.smallBlind)||5, bigBlind: parseInt(settings?.bigBlind)||10, startingStack: parseInt(settings?.startingStack)||1000, turnTimer: (parseInt(settings?.turnTimer)||20)*1000 };
+      const room = getOrCreateRoom(code, s);
+      const pid = crypto.randomUUID();
+      const result = room.addPlayer(pid, name.trim());
+      if (result.error) return error(result.error);
+      return json({ type: 'roomJoined', code, playerId: pid, isHost: true, roomData: room.getData(pid) });
+    }
 
-        if (type === 'createRoom') {
-          const { name, settings } = data;
-          if (!name?.trim()) { send(webSocket, { type: 'error', message: 'Pseudo requis' }); return; }
-          const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-          const s = { smallBlind: parseInt(settings?.smallBlind)||5, bigBlind: parseInt(settings?.bigBlind)||10, startingStack: parseInt(settings?.startingStack)||1000, turnTimer: (parseInt(settings?.turnTimer)||20)*1000 };
-          const room = getOrCreateRoom(code, s);
-          const result = room.addPlayer(playerId, name.trim());
-          if (result.error) { send(webSocket, { type: 'error', message: result.error }); return; }
-          currentRoom = room; currentCode = code;
-          send(webSocket, { type: 'roomJoined', code, playerId, isHost: true, roomData: room.getData(playerId) });
-        }
-        else if (type === 'joinRoom') {
-          const { name, room: rc } = data;
-          if (!name?.trim()) { send(webSocket, { type: 'error', message: 'Pseudo requis' }); return; }
-          if (!rc?.trim()) { send(webSocket, { type: 'error', message: 'Code requis' }); return; }
-          const code = rc.trim().toUpperCase();
-          const room = getOrCreateRoom(code);
-          const result = room.addPlayer(playerId, name.trim());
-          if (result.error) { send(webSocket, { type: 'error', message: result.error }); return; }
-          currentRoom = room; currentCode = code;
-          send(webSocket, { type: 'roomJoined', code, playerId, isHost: false, roomData: room.getData(playerId) });
-          broadcastToRoom(code, { type: 'gameState', roomData: room.getData() }, playerId);
-        }
-        else if (type === 'startGame') {
-          if (!currentRoom) { send(webSocket, { type: 'error', message: 'Pas dans une room' }); return; }
-          const result = currentRoom.startGame();
-          if (result.error) { send(webSocket, { type: 'error', message: result.error }); return; }
-          for (const p of currentRoom.players) { const c = this.connections.get(p.id); if (c) send(c, { type: 'gameState', roomData: currentRoom.getData(p.id) }); }
-          notifyTurn(currentRoom);
-        }
-        else if (type === 'playerAction') {
-          if (!currentRoom) { send(webSocket, { type: 'error', message: 'Pas dans une room' }); return; }
-          const { action, amount } = data;
-          let result;
-          switch (action) {
-            case 'fold': result = currentRoom.fold(playerId); break;
-            case 'check': result = currentRoom.check(playerId); break;
-            case 'call': result = currentRoom.call(playerId); break;
-            case 'raise': result = currentRoom.raise(playerId, amount); break;
-            default: send(webSocket, { type: 'error', message: 'Action inconnue' }); return;
-          }
-          if (result.error) { send(webSocket, { type: 'error', message: result.error }); return; }
-          broadcastToRoom(currentCode, { type: 'actionLog', player: result.player, action: result.action, amount: result.amount||0 });
-          for (const p of currentRoom.players) { const c = this.connections.get(p.id); if (c) send(c, { type: 'gameState', roomData: currentRoom.getData(p.id) }); }
-          if (currentRoom.phase === 'showdown') broadcastToRoom(currentCode, { type: 'showdown', roomData: currentRoom.getData() });
-          else notifyTurn(currentRoom);
-        }
-        else if (type === 'nextHand') {
-          if (!currentRoom) return;
-          const result = currentRoom.nextHand();
-          if (result.error) { send(webSocket, { type: 'error', message: result.error }); return; }
-          for (const p of currentRoom.players) { const c = this.connections.get(p.id); if (c) send(c, { type: 'gameState', roomData: currentRoom.getData(p.id) }); }
-          if (currentRoom.phase !== 'waiting') notifyTurn(currentRoom);
-        }
-        else if (type === 'leaveRoom') {
-          if (!currentRoom) return;
-          currentRoom.removePlayer(playerId);
-          broadcastToRoom(currentCode, { type: 'gameState', roomData: currentRoom.getData() });
-          cleanupRoom(currentCode); currentRoom = null; currentCode = null;
-        }
-      } catch (err) { console.error('WS error:', err); send(webSocket, { type: 'error', message: 'Erreur' }); }
-    });
+    // ─── JOIN ROOM ────────────────────────────────────────
+    if (path === '/api/room/join' && method === 'POST') {
+      const { name, room: rc } = body;
+      if (!name?.trim()) return error('Pseudo requis');
+      if (!rc?.trim()) return error('Code requis');
+      const code = rc.trim().toUpperCase();
+      const room = getOrCreateRoom(code);
+      const pid = crypto.randomUUID();
+      const result = room.addPlayer(pid, name.trim());
+      if (result.error) return error(result.error);
+      return json({ type: 'roomJoined', code, playerId: pid, isHost: false, roomData: room.getData(pid) });
+    }
 
-    webSocket.addEventListener('close', () => {
-      this.connections.delete(playerId);
-      if (currentRoom) { currentRoom.removePlayer(playerId); if (currentCode) { broadcastToRoom(currentCode, { type: 'gameState', roomData: currentRoom.getData() }); cleanupRoom(currentCode); } }
-    });
+    // ─── START GAME ───────────────────────────────────────
+    if (path === '/api/game/start' && method === 'POST') {
+      const { code, playerId: pid } = body;
+      const room = rooms.get(code);
+      if (!room) return error('Room introuvable');
+      const result = room.startGame();
+      if (result.error) return error(result.error);
+      return json({ type: 'gameState', roomData: room.getData(pid) });
+    }
+
+    // ─── PLAYER ACTION ────────────────────────────────────
+    if (path === '/api/game/action' && method === 'POST') {
+      const { code, playerId: pid, action, amount } = body;
+      const room = rooms.get(code);
+      if (!room) return error('Room introuvable');
+      let result;
+      switch (action) {
+        case 'fold': result = room.fold(pid); break;
+        case 'check': result = room.check(pid); break;
+        case 'call': result = room.call(pid); break;
+        case 'raise': result = room.raise(pid, amount); break;
+        default: return error('Action inconnue');
+      }
+      if (result.error) return error(result.error);
+      return json({ type: 'actionLog', player: result.player, action: result.action, amount: result.amount||0, roomData: room.getData(pid) });
+    }
+
+    // ─── GET GAME STATE ───────────────────────────────────
+    if (path === '/api/game/state' && method === 'GET') {
+      const code = url.searchParams.get('code');
+      const pid = url.searchParams.get('playerId') || '';
+      const room = rooms.get(code);
+      if (!room) return error('Room introuvable');
+      return json({ type: 'gameState', roomData: room.getData(pid) });
+    }
+
+    // ─── NEXT HAND ────────────────────────────────────────
+    if (path === '/api/game/next' && method === 'POST') {
+      const { code } = body;
+      const room = rooms.get(code);
+      if (!room) return error('Room introuvable');
+      const result = room.nextHand();
+      if (result.error) return error(result.error);
+      return json({ type: 'gameState', roomData: room.getData() });
+    }
+
+    // ─── LEAVE ROOM ───────────────────────────────────────
+    if (path === '/api/room/leave' && method === 'POST') {
+      const { code, playerId: pid } = body;
+      const room = rooms.get(code);
+      if (room) { room.removePlayer(pid); cleanupRoom(code); }
+      return json({ ok: true });
+    }
+
+    return error('Route introuvable', 404);
+  } catch (err) {
+    console.error('API error:', err);
+    return error('Erreur serveur', 500);
   }
 }
 
-const wsHandler = new WebSocketHandler();
-
 // ═══════════════════════════════════════════════════════════
-//  MAIN EXPORT
+//  MAIN
 // ═══════════════════════════════════════════════════════════
-
 export default {
   async fetch(request, env) {
-    if (request.headers.get('Upgrade') === 'websocket') {
-      const [client, server] = Object.values(new WebSocketPair());
-      wsHandler.handleConnection(server);
-      return new Response(null, { status: 101, webSocket: client });
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/api/')) {
+      return handleAPI(request);
     }
     return env.ASSETS.fetch(request);
   },
