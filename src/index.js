@@ -137,11 +137,18 @@ class GameRoom {
   _nextActivePlayer() { let idx=this.currentPlayerIndex, looped=false; while(true) { idx=(idx+1)%this.players.length; if (idx===this.currentPlayerIndex) { if (looped) return -1; looped=true; } const p=this.players[idx]; if (!p.folded&&!p.allIn) return idx; } }
   _skipPlayersWhoCantAct() { const p=this.players[this.currentPlayerIndex]; if (p.folded||p.allIn) this.currentPlayerIndex=this._nextActivePlayer(); }
   nextPlayer() {
-    this._clearTimer(); const next=this._nextActivePlayer();
-    const active=this.players.filter(p=>!p.folded), nai=active.filter(p=>!p.allIn);
-    const allMatched=nai.every(p=>p.bet===this.currentBet), allActed=nai.length<=1;
-    if (next===-1||next===this.currentPlayerIndex||(allMatched&&allActed)) { this._endPhase(); return; }
-    this.currentPlayerIndex=next; this._startTimer();
+    this._clearTimer();
+    const next = this._nextActivePlayer();
+    const active = this.players.filter(p => !p.folded);
+    const nai = active.filter(p => !p.allIn);
+    const allMatched = nai.every(p => p.bet === this.currentBet);
+    // Phase ends when all non-all-in players have matched the bet AND
+    // we've gone around the table (next would be the first player again)
+    const firstAfterDealer = this._firstAfterDealer();
+    const roundComplete = allMatched && (next === firstAfterDealer || next === -1 || next === this.currentPlayerIndex);
+    if (next === -1 || roundComplete) { this._endPhase(); return; }
+    this.currentPlayerIndex = next;
+    this._startTimer();
   }
   _endPhase() {
     for (const p of this.players) { p.bet=0; p.totalBet=0; } this.currentBet=0; this.minRaise=this.settings.bigBlind;
