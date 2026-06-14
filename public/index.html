@@ -135,19 +135,19 @@
 
 
 <!-- ═══════════════════════════════════════════════
-     ÉCRAN 2 : TABLE DE JEU
+     ÉCRAN 2 : TABLE DE JEU — Pro Design
 ════════════════════════════════════════════════ -->
 <div id="screen-game" class="screen">
 
-  <!-- Header -->
+  <!-- Header compact -->
   <div class="game-header">
     <div class="header-left">
       <div class="room-badge" id="header-room-name">Salle ---</div>
       <div class="blinds-badge" id="header-blinds">5 / 10</div>
+      <div class="player-count" id="header-players">0 joueurs</div>
     </div>
     <div class="header-center">
       <div class="phase-badge" id="header-phase">Attente</div>
-      <div class="player-count" id="header-players">0 joueurs</div>
     </div>
     <div class="header-right">
       <button class="btn-icon-only" id="btn-start" onclick="startGame()" style="display:none" title="Démarrer">▶️</button>
@@ -155,10 +155,10 @@
     </div>
   </div>
 
-  <!-- Corps -->
+  <!-- Corps principal -->
   <div class="game-body">
 
-    <!-- Table -->
+    <!-- Zone table -->
     <div class="table-zone">
       <div class="poker-table-wrapper">
         <div class="poker-table">
@@ -167,7 +167,6 @@
             <div class="pot-display">
               <div class="pot-label">Pot</div>
               <div class="pot-amount" id="pot-display">0</div>
-              <div class="pot-chips"></div>
             </div>
             <!-- Cartes communes -->
             <div class="community-cards" id="community-cards">
@@ -184,33 +183,75 @@
       </div>
     </div>
 
-    <!-- Sidebar -->
+    <!-- Sidebar droite -->
     <div class="side-panel">
+      <!-- Ta main -->
       <div class="panel-card">
         <div class="panel-header">🃏 Ta main</div>
+        <div class="my-hand-cards" id="my-hand-cards"></div>
         <div class="hand-strength" id="hand-strength">—</div>
       </div>
+      <!-- Infos partie -->
       <div class="panel-card">
-        <div class="panel-header">📋 Actions</div>
+        <div class="panel-header">📊 Partie</div>
+        <div class="game-info-row">
+          <span class="info-label">Mise actuelle</span>
+          <span class="info-value" id="info-current-bet">0</span>
+        </div>
+        <div class="game-info-row">
+          <span class="info-label">Dernière action</span>
+          <span class="info-value" id="info-last-action">—</span>
+        </div>
+      </div>
+      <!-- Log -->
+      <div class="panel-card panel-log">
+        <div class="panel-header">📋 Historique</div>
         <div id="log"></div>
       </div>
     </div>
   </div>
 
-  <!-- Barre d'actions -->
+  <!-- Barre d'actions pro -->
   <div class="action-bar">
-    <div class="action-info">
-      <div class="turn-label" id="turn-label">En attente…</div>
-      <div class="turn-sub" id="turn-sub"></div>
-      <div class="timer-bar"><div class="timer-fill" id="timer-fill"></div></div>
+    <!-- Timer circulaire + info -->
+    <div class="action-timer">
+      <div class="timer-ring">
+        <svg viewBox="0 0 80 80" class="timer-svg">
+          <circle cx="40" cy="40" r="36" class="timer-track"/>
+          <circle cx="40" cy="40" r="36" class="timer-progress" id="timer-circle"/>
+        </svg>
+        <div class="timer-text" id="timer-text">20</div>
+      </div>
+      <div class="turn-info">
+        <div class="turn-label" id="turn-label">En attente…</div>
+        <div class="turn-sub" id="turn-sub"></div>
+      </div>
     </div>
+
+    <!-- Boutons d'action -->
     <div class="action-buttons" id="action-buttons">
-      <button class="btn-action fold" id="btn-fold" onclick="playerAction('fold')">Se coucher</button>
-      <button class="btn-action check" id="btn-check" onclick="playerAction('check')">Checker</button>
-      <button class="btn-action call" id="btn-call" onclick="playerAction('call')">Suivre</button>
+      <button class="btn-action fold" id="btn-fold" onclick="playerAction('fold')">
+        <span class="btn-icon">🏳️</span> Se coucher
+      </button>
+      <button class="btn-action check" id="btn-check" onclick="playerAction('check')">
+        <span class="btn-icon">✋</span> Checker
+      </button>
+      <button class="btn-action call" id="btn-call" onclick="playerAction('call')">
+        <span class="btn-icon">💰</span> <span id="call-label">Suivre</span>
+      </button>
       <div class="raise-group">
-        <input type="number" id="raise-amount" value="20" min="0" step="10" />
-        <button class="btn-action raise" id="btn-raise" onclick="playerAction('raise')">Relancer</button>
+        <div class="raise-input-wrap">
+          <input type="number" id="raise-amount" value="20" min="0" step="5" />
+          <div class="raise-quick">
+            <button onclick="setRaise(0.5)">½</button>
+            <button onclick="setRaise(1)">1×</button>
+            <button onclick="setRaise(2)">2×</button>
+            <button onclick="setRaiseAllIn()">All-in</button>
+          </div>
+        </div>
+        <button class="btn-action raise" id="btn-raise" onclick="playerAction('raise')">
+          <span class="btn-icon">🚀</span> Relancer
+        </button>
       </div>
     </div>
   </div>
@@ -271,7 +312,9 @@
     players: [],
     myTurn: false,
     currentBet: 0,
+    bigBlind: 10,
     turnTimer: 20,
+    turnDeadline: null,
     timerInterval: null,
     roomListener: null,
     playersListListener: null,
@@ -576,6 +619,7 @@
     state.phase = gs.phase || 'waiting';
     state.players = gs.players || [];
     state.currentBet = gs.currentBet || 0;
+    state.bigBlind = gs.bigBlind || 10;
     state.turnTimer = gs.turnTimer || 20;
     state.turnDeadline = gs.turnDeadline || null;
 
@@ -599,11 +643,25 @@
     renderCommunityCards(state.communityCards);
     renderSeats(state.players, gs.currentPlayerIndex);
 
-    // Main du joueur
+    // Main du joueur — affichage des cartes dans la sidebar
     const me = state.players.find(p => p.isMe);
+    const myHandEl = document.getElementById('my-hand-cards');
+    if (myHandEl && me && me.cards && me.cards.length === 2) {
+      myHandEl.innerHTML = me.cards.map(c => {
+        if (!c || c.rank === '?') return '<div class="card mini hidden"></div>';
+        const c = (c.suit === '♥' || c.suit === '♦') ? 'red' : 'black';
+        return `<div class="card mini ${c}"><span class="rank">${c.rank}</span><span class="suit">${c.suit}</span></div>`;
+      }).join('');
+    } else if (myHandEl) {
+      myHandEl.innerHTML = '';
+    }
+
     document.getElementById('hand-strength').textContent =
       (me && me.cards && me.cards.length === 2 && state.communityCards.length >= 3)
         ? evaluateHandStrength(me.cards, state.communityCards) : '—';
+
+    // Mise à jour des infos partie
+    document.getElementById('info-current-bet').textContent = state.currentBet;
 
     // Vérifier si c'est mon tour
     if (me && !me.folded && gs.currentPlayerIndex !== undefined && gs.players) {
@@ -611,7 +669,8 @@
       if (currentPlayer && currentPlayer.id === playerId && !state.myTurn && state.phase !== 'showdown' && state.phase !== 'waiting') {
         state.myTurn = true;
         const toCall = state.currentBet - (me.bet || 0);
-        document.getElementById('btn-call').textContent = toCall > 0 ? 'Suivre ' + toCall : 'Suivre';
+        document.getElementById('call-label').textContent = toCall > 0 ? 'Suivre ' + toCall : 'Suivre';
+        document.getElementById('btn-call').querySelector('.btn-icon').textContent = toCall > 0 ? '💰' : '✅';
         document.getElementById('raise-amount').value = state.currentBet + (gs.bigBlind || 10);
         updateTurnUI(true, "C'est ton tour !");
       }
@@ -641,35 +700,41 @@
   }
 
   // ══════════════════════════════════════════
-  //  TIMER (basé sur turnDeadline serveur)
+  //  TIMER (cercle SVG basé sur turnDeadline serveur)
   // ══════════════════════════════════════════
 
   function startServerTimer(deadline) {
     stopTimer();
-    const fill = document.getElementById('timer-fill');
-    if (!fill) return;
+    const circle = document.getElementById('timer-circle');
+    const text = document.getElementById('timer-text');
+    if (!circle || !text) return;
+
+    const totalDuration = state.turnTimer * 1000;
+    const circumference = 226; // 2 * π * 36
 
     state.timerInterval = setInterval(() => {
       const now = Date.now();
       const remaining = Math.max(0, deadline - now);
-      const totalDuration = state.turnTimer * 1000;
-      const pct = Math.max(0, (remaining / totalDuration) * 100);
+      const pct = remaining / totalDuration;
+      const offset = circumference * (1 - pct);
 
-      fill.style.transition = 'width 0.5s linear';
-      fill.style.width = pct + '%';
+      circle.style.strokeDashoffset = offset;
+      text.textContent = Math.ceil(remaining / 1000);
 
-      // Changer la couleur quand il reste peu de temps
-      if (pct < 20) {
-        fill.style.background = 'linear-gradient(90deg, #e74c3c, #c0392b)';
-        fill.style.boxShadow = '0 0 8px rgba(231,76,60,0.5)';
-      } else {
-        fill.style.background = 'linear-gradient(90deg, var(--gold), #f5d76e)';
-        fill.style.boxShadow = '0 0 8px var(--gold-glow)';
+      // Couleurs selon le temps restant
+      circle.classList.remove('warning', 'danger');
+      text.classList.remove('warning', 'danger');
+      if (pct < 0.15) {
+        circle.classList.add('danger');
+        text.classList.add('danger');
+      } else if (pct < 0.35) {
+        circle.classList.add('warning');
+        text.classList.add('warning');
       }
 
       if (remaining <= 0) {
         stopTimer();
-        // Notifier le serveur que le timer a expiré (auto-fold)
+        // Auto-fold côté client
         if (state.myTurn && state.roomCode) {
           state.myTurn = false;
           updateTurnUI(false, 'Temps écoulé !');
@@ -685,9 +750,43 @@
       clearInterval(state.timerInterval);
       state.timerInterval = null;
     }
-    const fill = document.getElementById('timer-fill');
-    if (fill) fill.style.width = '100%';
+    // Reset le cercle SVG
+    const circle = document.getElementById('timer-circle');
+    const text = document.getElementById('timer-text');
+    if (circle) {
+      circle.style.strokeDashoffset = 0;
+      circle.classList.remove('warning', 'danger');
+    }
+    if (text) {
+      text.textContent = state.turnTimer || '20';
+      text.classList.remove('warning', 'danger');
+    }
   }
+
+  // ══════════════════════════════════════════
+  //  RAISE HELPERS
+  // ══════════════════════════════════════════
+  function setRaise(multiplier) {
+    const input = document.getElementById('raise-amount');
+    if (!input) return;
+    const bigBlind = state.bigBlind || 10;
+    const me = state.players.find(p => p.isMe);
+    if (!me) return;
+    if (multiplier === 'allin') {
+      input.value = me.stack + (me.bet || 0);
+    } else {
+      input.value = Math.round(state.currentBet + (bigBlind * multiplier));
+    }
+    input.focus();
+  }
+
+  function setRaiseAllIn() {
+    setRaise('allin');
+  }
+
+  // Helper global pour les boutons de raise
+  window.setRaise = setRaise;
+  window.setRaiseAllIn = setRaiseAllIn;
 
   // ══════════════════════════════════════════
   //  HAND EVALUATION (client-side, simplified)
