@@ -478,11 +478,11 @@
   }
 
   function detachListeners() {
-    if (state.roomListener) {
+    if (state.roomListener && state.roomCode) {
       db.ref('rooms/' + state.roomCode).off('value', state.roomListener);
       state.roomListener = null;
     }
-    if (state.playersListListener) {
+    if (state.playersListListener && state.roomCode) {
       db.ref('events/' + state.roomCode).off('child_added', state.playersListListener);
       state.playersListListener = null;
     }
@@ -598,7 +598,7 @@
         ? evaluateHandStrength(me.cards, state.communityCards) : '—';
 
     // Vérifier si c'est mon tour
-    if (me && gs.currentPlayerIndex !== undefined && gs.players) {
+    if (me && !me.folded && gs.currentPlayerIndex !== undefined && gs.players) {
       const currentPlayer = gs.players[gs.currentPlayerIndex];
       if (currentPlayer && currentPlayer.id === playerId && !state.myTurn && state.phase !== 'showdown' && state.phase !== 'waiting') {
         state.myTurn = true;
@@ -787,9 +787,13 @@
   // ══════════════════════════════════════════
   //  CLEANUP ON PAGE UNLOAD
   // ══════════════════════════════════════════
+  // Utiliser visibilitychange + beforeunload pour marquer la déconnexion
+  // Note: beforeunload ne peut pas attendre une opération async,
+  // on utilise donc une approche best-effort avec sendBeacon ou sync
   window.addEventListener('beforeunload', () => {
     if (state.roomCode && state.playerId) {
-      // Utilisateur quitte la page → laisser un marqueur
+      // Best-effort: utiliser une requête synchrone ou juste laisser le timeout serveur gérer
+      // Le listener temps réel Firebase gère automatiquement la déconnexion via .info/connected
       db.ref('rooms/' + state.roomCode + '/players').once('value', snap => {
         const players = snap.val() || [];
         const idx = players.findIndex(p => p.id === state.playerId);

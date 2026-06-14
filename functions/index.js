@@ -273,7 +273,14 @@ function doShowdown(room) {
   const nonFolded = room.players.map((p, i) => ({ ...p, _realIdx: i }))
     .filter(p => !p.folded && p.cards.length === 2);
 
-  if (nonFolded.length === 1) {
+  if (nonFolded.length === 0) {
+    // Tous foldés → le dernier joueur non-foldé gagne (celui qui n'a pas de cartes distribuées)
+    // En fait, si tous sont foldés, le dernier joueur connecté gagne le pot
+    const lastConnected = room.players.find(p => p.isConnected);
+    if (lastConnected) {
+      lastConnected.stack += room.pot;
+    }
+  } else if (nonFolded.length === 1) {
     room.players[nonFolded[0]._realIdx].stack += room.pot;
   } else if (nonFolded.length > 1) {
     const evaluated = nonFolded.map(p => ({
@@ -306,6 +313,7 @@ function sanitizeRoomData(room, forPlayerId) {
     bigBlind: room.settings?.bigBlind || 10,
     startingStack: room.settings?.startingStack || 1000,
     turnTimer: room.settings?.turnTimer || 20,
+    maxPlayers: room.settings?.maxPlayers || 6,
     communityCards: room.communityCards || [],
     currentBet: room.currentBet || 0,
     dealerIndex: room.dealerIndex,
@@ -345,7 +353,16 @@ exports.createRoom = functions.https.onCall(async (data, context) => {
     maxPlayers: parseInt(data.settings?.maxPlayers) || 6,
   };
 
-  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+  let code;
+  let attempts = 0;
+  do {
+    code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    attempts++;
+  } while ((await getRoomState(code)) && attempts < 10);
+  
+  if (attempts >= 10) {
+    throw new functions.https.HttpsError('internal', 'Impossible de générer un code unique');
+  }
   const playerId = context.auth?.uid || `anon_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
   const roomState = {
@@ -645,8 +662,12 @@ exports.leaveRoom = functions.https.onCall(async (data, context) => {
       await firestore.collection('rooms').doc(code).delete();
       return { ok: true };
     }
-    if (idx === room.dealerIndex || room.dealerIndex >= room.players.length) {
+    // Ajuster le dealerIndex si nécessaire
+    if (room.dealerIndex >= room.players.length) {
       room.dealerIndex = 0;
+    }
+    if (idx < room.dealerIndex) {
+      room.dealerIndex--;
     }
     room.players[room.dealerIndex].isDealer = true;
   } else {

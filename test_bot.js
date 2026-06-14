@@ -9,7 +9,7 @@ const { getDatabase, ref, onValue, off, get } = require('firebase/database');
 const { getFunctions, httpsCallable } = require('firebase/functions');
 
 const BASE_CONFIG = {
-  apiKey: "AIzaSy...CRdw",
+  apiKey: "AIzaSyCIpO0jTkX4PJJmL47unyHBhrZW62eCRdw",
   authDomain: "poker-home-app.firebaseapp.com",
   databaseURL: "https://poker-home-app-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "poker-home-app",
@@ -178,9 +178,18 @@ class PokerBot {
 }
 
 async function getRoom(roomCode) {
-  // Utiliser une app séparée pour la lecture
-  const snap = await get(ref(getDatabase(createApp('reader')), `rooms/${roomCode}`));
-  return snap.val();
+  // Utiliser une app séparée pour la lecture, avec auth
+  const app = createApp('reader_' + Date.now());
+  const readerAuth = getAuth(app);
+  try {
+    await signInAnonymously(readerAuth);
+    // Attendre un peu que l'auth soit propagée
+    await new Promise(r => setTimeout(r, 1000));
+    const snap = await get(ref(getDatabase(app), `rooms/${roomCode}`));
+    return snap.val();
+  } finally {
+    try { await deleteApp(app); } catch (e) {}
+  }
 }
 
 // ══════════════════════════════════════════
