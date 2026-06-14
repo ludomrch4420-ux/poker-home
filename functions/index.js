@@ -468,7 +468,7 @@ exports.joinRoom = functions.https.onCall(async (data, context) => {
   if (room.players.length >= (room.settings.maxPlayers || 6))
     throw new functions.https.HttpsError('resource-exhausted', `Room pleine (max ${room.settings.maxPlayers || 6})`);
 
-  const playerId = context.auth?.uid || data.playerId || `anon_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const playerId = data.playerId || context.auth?.uid || `anon_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
   const existingById = room.players.find(p => p.id === playerId);
   if (existingById) {

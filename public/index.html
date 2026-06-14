@@ -374,8 +374,9 @@
     setLoading('btn-create', true);
 
     try {
-      // Attendre que l'auth Firebase soit prête
-      await auth.signInAnonymously();
+      // Attendre que l'auth Firebase soit prête et récupérer l'UID
+      const cred = await auth.signInAnonymously();
+      const uid = cred.user.uid;
 
       const createRoomFn = functions.httpsCallable('createRoom');
       const settings = {
@@ -385,7 +386,7 @@
         turnTimer: parseInt(document.getElementById('input-timer').value),
       };
 
-      const result = await createRoomFn({ name, settings });
+      const result = await createRoomFn({ name, settings, playerId: uid });
       const { code, playerId, isHost, roomData } = result.data;
 
       state.roomCode = code;
@@ -425,11 +426,12 @@
     setLoading('btn-join', true);
 
     try {
-      // Attendre que l'auth Firebase soit prête
-      await auth.signInAnonymously();
+      // Attendre que l'auth Firebase soit prête et récupérer l'UID
+      const cred = await auth.signInAnonymously();
+      const uid = cred.user.uid;
 
       const joinRoomFn = functions.httpsCallable('joinRoom');
-      const result = await joinRoomFn({ name, roomCode: room });
+      const result = await joinRoomFn({ name, roomCode: room, playerId: uid });
       const { code, playerId, isHost, roomData } = result.data;
 
       // Vérifier que le code retourné correspond
