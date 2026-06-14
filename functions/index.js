@@ -158,7 +158,6 @@ function findWinners(players, community) {
 // ═══════════════════════════════════════════════════════════
 //  GAME HELPERS
 // ═══════════════════════════════════════════════════════════
-const DEFAULTS = { smallBlind: 5, bigBlind: 10, startingStack: 1000, turnTimer: 20, maxPlayers: 6 };
 
 async function getRoomState(code) {
   const snap = await db.ref(`rooms/${code}`).once('value');
@@ -274,8 +273,7 @@ function doShowdown(room) {
     .filter(p => !p.folded && p.cards.length === 2);
 
   if (nonFolded.length === 0) {
-    // Tous foldés → le dernier joueur non-foldé gagne (celui qui n'a pas de cartes distribuées)
-    // En fait, si tous sont foldés, le dernier joueur connecté gagne le pot
+    // Tous foldés → le dernier joueur connecté gagne le pot
     const lastConnected = room.players.find(p => p.isConnected);
     if (lastConnected) {
       lastConnected.stack += room.pot;
@@ -319,6 +317,7 @@ function sanitizeRoomData(room, forPlayerId) {
     dealerIndex: room.dealerIndex,
     currentPlayerIndex: room.currentPlayerIndex,
     handComplete: room.handComplete || false,
+    turnDeadline: room.turnDeadline || null,
     players: (room.players || []).map(p => ({
       id: p.id,
       name: p.name,
@@ -335,6 +334,52 @@ function sanitizeRoomData(room, forPlayerId) {
         : ((p.cards || []).length > 0 ? [{ rank: '?', suit: '?' }, { rank: '?', suit: '?' }] : []),
     })),
   };
+}
+
+// ═══════════════════════════════════════════════════════════
+//  TIMER LOGIC — Auto-fold côté serveur
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Vérifie si le timer d'un joueur est écoulé et le fait automatiquer se coucher.
+ * Appelée par le client après chaque action ET par un cron périodique.
+ */
+async function checkAndExpireTurn(code) {
+  const room = await getRoomState(code);
+  if (!room) return null;
+  if (room.phase === 'waiting' || room.phase === 'showdown') return null;
+  if (!room.turnDeadline) return null;
+
+  const now = Date.now();
+  if (now < room.turnDeadline) return null; // Pas encore expiré
+
+  // Timer expiré → auto-fold du joueur courant
+  if (room.currentPlayerIndex < 0 || room.currentPlayerIndex >= room.players.length) return null;
+
+  const currentPlayer = room.players[room.currentPlayerIndex];
+  if (!currentPlayer || currentPlayer.folded || currentPlayer.allIn) return null;
+
+  currentPlayer.folded = true;
+  const playerName = currentPlayer.name;
+
+  advanceToNextPlayer(room);
+
+  // Reset le timer pour le prochain joueur
+  if (room.phase !== 'showdown' && room.phase !== 'waiting') {
+    room.turnDeadline = Date.now() + (room.settings.turnTimer * 1000);
+  } else {
+    room.turnDeadline = null;
+  }
+
+  room.lastAction = Date.now();
+  await setRoomState(code, room);
+  await notifyRoom(code, 'turnExpired', {
+    player: playerName,
+    action: 'fold',
+    roomData: sanitizeRoomData(room, null),
+  });
+
+  return { expired: true, player: playerName, roomData: sanitizeRoomData(room, null) };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -377,6 +422,7 @@ exports.createRoom = functions.https.onCall(async (data, context) => {
     currentBet: 0,
     minRaise: settings.bigBlind,
     handComplete: false,
+    turnDeadline: null,
     players: [{
       id: playerId,
       name,
@@ -422,10 +468,8 @@ exports.joinRoom = functions.https.onCall(async (data, context) => {
   if (room.players.length >= (room.settings.maxPlayers || 6))
     throw new functions.https.HttpsError('resource-exhausted', `Room pleine (max ${room.settings.maxPlayers || 6})`);
 
-  // Utiliser l'UID Firebase Auth comme playerId (unique par utilisateur)
   const playerId = context.auth?.uid || data.playerId || `anon_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-  // Vérifier si ce joueur est déjà dans la room (par playerId OU par nom)
   const existingById = room.players.find(p => p.id === playerId);
   if (existingById) {
     existingById.isConnected = true;
@@ -462,9 +506,14 @@ exports.startGame = functions.https.onCall(async (data, context) => {
   if (!room) throw new functions.https.HttpsError('not-found', 'Room introuvable');
   if (room.phase !== 'waiting') throw new functions.https.HttpsError('failed-precondition', 'Partie déjà en cours');
 
+  // Vérifier que c'est le host qui démarre
   const connectedPlayers = room.players.filter(p => p.isConnected);
   if (connectedPlayers.length < 2)
     throw new functions.https.HttpsError('failed-precondition', 'Il faut au moins 2 joueurs');
+
+  // Le premier joueur connecté (index 0) est le host
+  if (connectedPlayers[0].id !== playerId)
+    throw new functions.https.HttpsError('permission-denied', 'Seul le host peut démarrer la partie');
 
   const deck = createShuffledDeck();
   room.communityCards = [];
@@ -498,6 +547,7 @@ exports.startGame = functions.https.onCall(async (data, context) => {
   room.phase = 'preflop';
   room.currentPlayerIndex = nextConnectedIndex(room, bbIdx);
   room.lastAction = Date.now();
+  room.turnDeadline = Date.now() + (room.settings.turnTimer * 1000);
 
   await setRoomState(code, room);
   await notifyRoom(code, 'gameStarted', { roomData: sanitizeRoomData(room, null) });
@@ -521,9 +571,14 @@ exports.playerAction = functions.https.onCall(async (data, context) => {
 
   const currentPlayer = room.players[room.currentPlayerIndex];
   if (currentPlayer.id !== playerId)
-    throw new functions.https.HttpsError('permission-denied', 'Ce n\'est pas ton tour');
+    throw new functions.https.HttpsError('permission-denied', "Ce n'est pas ton tour");
   if (currentPlayer.folded || currentPlayer.allIn)
     throw new functions.https.HttpsError('failed-precondition', 'Tu ne peux pas agir');
+
+  // Vérifier le timer (anti-triche côté serveur)
+  if (room.turnDeadline && Date.now() > room.turnDeadline) {
+    throw new functions.https.HttpsError('deadline-exceeded', 'Temps écoulé');
+  }
 
   let result;
   switch (action) {
@@ -566,6 +621,13 @@ exports.playerAction = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError('invalid-argument', 'Action inconnue');
   }
 
+  // Reset le timer pour le prochain joueur
+  if (room.phase !== 'showdown' && room.phase !== 'waiting') {
+    room.turnDeadline = Date.now() + (room.settings.turnTimer * 1000);
+  } else {
+    room.turnDeadline = null;
+  }
+
   room.lastAction = Date.now();
   await setRoomState(code, room);
   await notifyRoom(code, 'playerAction', {
@@ -589,7 +651,7 @@ exports.nextHand = functions.https.onCall(async (data, context) => {
   const room = await getRoomState(code);
   if (!room) throw new functions.https.HttpsError('not-found', 'Room introuvable');
   if (room.phase !== 'showdown')
-    throw new functions.https.HttpsError('failed-precondition', 'La main n\'est pas terminée');
+    throw new functions.https.HttpsError('failed-precondition', "La main n'est pas terminée");
 
   room.players = room.players.filter(p => p.stack > 0 && p.isConnected);
 
@@ -597,6 +659,7 @@ exports.nextHand = functions.https.onCall(async (data, context) => {
     room.phase = 'waiting';
     room.dealerIndex = -1;
     room.currentPlayerIndex = -1;
+    room.turnDeadline = null;
     await setRoomState(code, room);
     return { roomData: sanitizeRoomData(room, null), message: 'Pas assez de joueurs' };
   }
@@ -611,6 +674,7 @@ exports.nextHand = functions.https.onCall(async (data, context) => {
   room.currentBet = 0;
   room.minRaise = room.settings.bigBlind;
   room.handComplete = false;
+  room.turnDeadline = null;
 
   for (const p of room.players) {
     p.cards = []; p.bet = 0; p.totalBet = 0; p.folded = false; p.allIn = false;
@@ -637,6 +701,7 @@ exports.nextHand = functions.https.onCall(async (data, context) => {
   room.phase = 'preflop';
   room.currentPlayerIndex = nextConnectedIndex(room, bbIdx);
   room.lastAction = Date.now();
+  room.turnDeadline = Date.now() + (room.settings.turnTimer * 1000);
 
   await setRoomState(code, room);
   await notifyRoom(code, 'newHand', { roomData: sanitizeRoomData(room, null) });
@@ -675,6 +740,12 @@ exports.leaveRoom = functions.https.onCall(async (data, context) => {
     room.players[idx].isConnected = false;
     if (room.currentPlayerIndex === idx) {
       advanceToNextPlayer(room);
+      // Reset le timer pour le nouveau joueur
+      if (room.phase !== 'showdown' && room.phase !== 'waiting') {
+        room.turnDeadline = Date.now() + (room.settings.turnTimer * 1000);
+      } else {
+        room.turnDeadline = null;
+      }
     }
   }
 
@@ -682,6 +753,34 @@ exports.leaveRoom = functions.https.onCall(async (data, context) => {
   await notifyRoom(code, 'playerLeft', { playerId, playerCount: room.players.filter(p => p.isConnected).length });
 
   return { ok: true };
+});
+
+// ═══════════════════════════════════════════════════════════
+//  TIMER CRON — Vérifie les timers expirés toutes les 5 secondes
+// ═══════════════════════════════════════════════════════════
+
+exports.checkTurnTimers = functions.pubsub.schedule('every 1 minutes').onRun(async () => {
+  const snap = await db.ref('rooms').once('value');
+  const rooms = snap.val();
+  if (!rooms) return;
+
+  for (const [code, room] of Object.entries(rooms)) {
+    if (!room.turnDeadline) continue;
+    if (room.phase === 'waiting' || room.phase === 'showdown') continue;
+    if (Date.now() >= room.turnDeadline) {
+      await checkAndExpireTurn(code);
+    }
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+//  MANUAL TIMER CHECK — Appelé par le client pour forcer la vérif
+// ═══════════════════════════════════════════════════════════
+
+exports.checkTimer = functions.https.onCall(async (data, context) => {
+  const code = (data.code || '').trim().toUpperCase();
+  const result = await checkAndExpireTurn(code);
+  return { expired: result ? true : false, player: result?.player || null };
 });
 
 // Nettoyage des rooms inactives

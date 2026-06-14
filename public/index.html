@@ -577,6 +577,14 @@
     state.players = gs.players || [];
     state.currentBet = gs.currentBet || 0;
     state.turnTimer = gs.turnTimer || 20;
+    state.turnDeadline = gs.turnDeadline || null;
+
+    // Démarrer/arrêter le timer visuel si on a un deadline serveur
+    if (state.turnDeadline && state.phase !== 'showdown' && state.phase !== 'waiting') {
+      startServerTimer(state.turnDeadline);
+    } else {
+      stopTimer();
+    }
 
     // Header
     document.getElementById('pot-display').textContent = state.pot;
@@ -606,7 +614,6 @@
         document.getElementById('btn-call').textContent = toCall > 0 ? 'Suivre ' + toCall : 'Suivre';
         document.getElementById('raise-amount').value = state.currentBet + (gs.bigBlind || 10);
         updateTurnUI(true, "C'est ton tour !");
-        startTimer(state.turnTimer);
       }
     }
 
@@ -634,29 +641,43 @@
   }
 
   // ══════════════════════════════════════════
-  //  TIMER
+  //  TIMER (basé sur turnDeadline serveur)
   // ══════════════════════════════════════════
-  let timerStart = 0;
-  let timerDuration = 0;
 
-  function startTimer(seconds) {
+  function startServerTimer(deadline) {
     stopTimer();
-    timerStart = Date.now();
-    timerDuration = seconds * 1000;
     const fill = document.getElementById('timer-fill');
-    fill.style.transition = 'none';
-    fill.style.width = '100%';
+    if (!fill) return;
 
     state.timerInterval = setInterval(() => {
-      const elapsed = Date.now() - timerStart;
-      const remaining = Math.max(0, 1 - (elapsed / timerDuration));
+      const now = Date.now();
+      const remaining = Math.max(0, deadline - now);
+      const totalDuration = state.turnTimer * 1000;
+      const pct = Math.max(0, (remaining / totalDuration) * 100);
+
       fill.style.transition = 'width 0.5s linear';
-      fill.style.width = (remaining * 100) + '%';
+      fill.style.width = pct + '%';
+
+      // Changer la couleur quand il reste peu de temps
+      if (pct < 20) {
+        fill.style.background = 'linear-gradient(90deg, #e74c3c, #c0392b)';
+        fill.style.boxShadow = '0 0 8px rgba(231,76,60,0.5)';
+      } else {
+        fill.style.background = 'linear-gradient(90deg, var(--gold), #f5d76e)';
+        fill.style.boxShadow = '0 0 8px var(--gold-glow)';
+      }
 
       if (remaining <= 0) {
         stopTimer();
+        // Notifier le serveur que le timer a expiré (auto-fold)
+        if (state.myTurn && state.roomCode) {
+          state.myTurn = false;
+          updateTurnUI(false, 'Temps écoulé !');
+          const checkTimerFn = functions.httpsCallable('checkTimer');
+          checkTimerFn({ code: state.roomCode }).catch(() => {});
+        }
       }
-    }, 500);
+    }, 200);
   }
 
   function stopTimer() {
