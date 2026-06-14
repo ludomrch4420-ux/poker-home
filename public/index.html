@@ -640,10 +640,10 @@
     const me = state.players.find(p => p.isMe);
     const myHandEl = document.getElementById('my-hand-cards');
     if (myHandEl && me && me.cards && me.cards.length === 2) {
-      myHandEl.innerHTML = me.cards.map(c => {
-        if (!c || c.rank === '?') return '<div class="card mini hidden"></div>';
-        const c = (c.suit === '♥' || c.suit === '♦') ? 'red' : 'black';
-        return `<div class="card mini ${c}"><span class="rank">${c.rank}</span><span class="suit">${c.suit}</span></div>`;
+      myHandEl.innerHTML = me.cards.map(card => {
+        if (!card || card.rank === '?') return '<div class="card mini hidden"></div>';
+        const color = (card.suit === '♥' || card.suit === '♦') ? 'red' : 'black';
+        return `<div class="card mini ${color}"><span class="rank">${card.rank}</span><span class="suit">${card.suit}</span></div>`;
       }).join('');
     } else if (myHandEl) {
       myHandEl.innerHTML = '';
