@@ -338,6 +338,9 @@
     setLoading('btn-create', true);
 
     try {
+      // Attendre que l'auth Firebase soit prête
+      await auth.signInAnonymously();
+
       const createRoomFn = functions.httpsCallable('createRoom');
       const settings = {
         smallBlind: parseInt(document.getElementById('input-sb').value),
@@ -360,7 +363,7 @@
       if (roomData) {
         document.getElementById('header-room-name').textContent = 'Salle ' + code;
         document.getElementById('header-blinds').textContent = roomData.smallBlind + ' / ' + roomData.bigBlind;
-        updateGameState(roomData);
+        updateGameState(roomData, playerId);
       }
 
       // Afficher le bouton démarrer pour le host
@@ -386,9 +389,17 @@
     setLoading('btn-join', true);
 
     try {
+      // Attendre que l'auth Firebase soit prête
+      await auth.signInAnonymously();
+
       const joinRoomFn = functions.httpsCallable('joinRoom');
       const result = await joinRoomFn({ name, roomCode: room });
       const { code, playerId, isHost, roomData } = result.data;
+
+      // Vérifier que le code retourné correspond
+      if (code !== room) {
+        throw new Error('Code de salle incohérent. Rejoint: ' + code + ', demandé: ' + room);
+      }
 
       state.roomCode = code;
       state.playerId = playerId;
@@ -401,7 +412,7 @@
       if (roomData) {
         document.getElementById('header-room-name').textContent = 'Salle ' + code;
         document.getElementById('header-blinds').textContent = roomData.smallBlind + ' / ' + roomData.bigBlind;
-        updateGameState(roomData);
+        updateGameState(roomData, playerId);
       }
 
       if (isHost) {
@@ -433,6 +444,7 @@
     state.phase = 'lobby';
     state.myTurn = false;
     showScreen('lobby');
+    document.getElementById('btn-start').style.display = 'none';
   }
 
   // ══════════════════════════════════════════
@@ -467,9 +479,11 @@
 
   function detachListeners() {
     if (state.roomListener) {
+      db.ref('rooms/' + state.roomCode).off('value', state.roomListener);
       state.roomListener = null;
     }
     if (state.playersListListener) {
+      db.ref('events/' + state.roomCode).off('child_added', state.playersListListener);
       state.playersListListener = null;
     }
     stopTimer();
@@ -491,9 +505,9 @@
     stopTimer();
     try {
       const startGameFn = functions.httpsCallable('startGame');
-      const result = await startGameFn({ code: state.roomCode });
+      const result = await startGameFn({ code: state.roomCode, playerId: state.playerId });
       if (result.data?.roomData) {
-        updateGameState(result.data.roomData);
+        updateGameState(result.data.roomData, state.playerId);
       }
       document.getElementById('btn-start').style.display = 'none';
     } catch (err) {
@@ -515,6 +529,7 @@
         code: state.roomCode,
         action: type,
         amount,
+        playerId: state.playerId,
       });
 
       if (result.data) {
@@ -535,9 +550,9 @@
 
     try {
       const nextHandFn = functions.httpsCallable('nextHand');
-      const result = await nextHandFn({ code: state.roomCode });
+      const result = await nextHandFn({ code: state.roomCode, playerId: state.playerId });
       if (result.data?.roomData) {
-        updateGameState(result.data.roomData);
+        updateGameState(result.data.roomData, state.playerId);
       }
     } catch (err) {
       showToast('Erreur : ' + (err.message || 'Impossible de continuer'));

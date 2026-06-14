@@ -342,6 +342,7 @@ exports.createRoom = functions.https.onCall(async (data, context) => {
     bigBlind: parseInt(data.settings?.bigBlind) || 10,
     startingStack: parseInt(data.settings?.startingStack) || 1000,
     turnTimer: parseInt(data.settings?.turnTimer) || 20,
+    maxPlayers: parseInt(data.settings?.maxPlayers) || 6,
   };
 
   const code = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -401,12 +402,17 @@ exports.joinRoom = functions.https.onCall(async (data, context) => {
   const room = await getRoomState(roomCode);
   if (!room) throw new functions.https.HttpsError('not-found', 'Salle introuvable');
   if (room.phase !== 'waiting') throw new functions.https.HttpsError('failed-precondition', 'Partie déjà en cours');
-  if (room.players.length >= room.settings.maxPlayers)
-    throw new functions.https.HttpsError('resource-exhausted', `Room pleine (max ${room.settings.maxPlayers})`);
+  if (room.players.length >= (room.settings.maxPlayers || 6))
+    throw new functions.https.HttpsError('resource-exhausted', `Room pleine (max ${room.settings.maxPlayers || 6})`);
 
-  const playerId = context.auth?.uid || `anon_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  // Utiliser l'UID Firebase Auth comme playerId (unique par utilisateur)
+  const playerId = context.auth?.uid || data.playerId || `anon_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-  if (room.players.find(p => p.id === playerId)) {
+  // Vérifier si ce joueur est déjà dans la room (par playerId OU par nom)
+  const existingById = room.players.find(p => p.id === playerId);
+  if (existingById) {
+    existingById.isConnected = true;
+    await setRoomState(roomCode, room);
     return { code: roomCode, playerId, isHost: false, roomData: sanitizeRoomData(room, playerId) };
   }
 
@@ -485,6 +491,7 @@ exports.startGame = functions.https.onCall(async (data, context) => {
 exports.playerAction = functions.https.onCall(async (data, context) => {
   const code = (data.code || '').trim().toUpperCase();
   const playerId = context.auth?.uid || data.playerId;
+  if (!playerId) throw new functions.https.HttpsError('unauthenticated', 'Non authentifié');
   const action = data.action;
   const amount = parseInt(data.amount) || 0;
 
@@ -623,6 +630,7 @@ exports.nextHand = functions.https.onCall(async (data, context) => {
 exports.leaveRoom = functions.https.onCall(async (data, context) => {
   const code = (data.code || '').trim().toUpperCase();
   const playerId = context.auth?.uid || data.playerId;
+  if (!playerId) return { ok: true };
 
   const room = await getRoomState(code);
   if (!room) return { ok: true };
