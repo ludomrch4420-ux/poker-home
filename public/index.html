@@ -155,6 +155,14 @@
     </div>
   </div>
 
+  <!-- Barre timer en haut -->
+  <div class="top-bar">
+    <div class="timer-display">
+      <div class="timer-label">⏱ Temps</div>
+      <div class="timer-value" id="timer-text">--</div>
+    </div>
+  </div>
+
   <!-- Corps principal -->
   <div class="game-body">
 
@@ -211,24 +219,8 @@
     </div>
   </div>
 
-  <!-- Barre d'actions pro -->
+  <!-- Barre d'actions centrée -->
   <div class="action-bar">
-    <!-- Timer circulaire + info -->
-    <div class="action-timer">
-      <div class="timer-ring">
-        <svg viewBox="0 0 80 80" class="timer-svg">
-          <circle cx="40" cy="40" r="36" class="timer-track"/>
-          <circle cx="40" cy="40" r="36" class="timer-progress" id="timer-circle"/>
-        </svg>
-        <div class="timer-text" id="timer-text">20</div>
-      </div>
-      <div class="turn-info">
-        <div class="turn-label" id="turn-label">En attente…</div>
-        <div class="turn-sub" id="turn-sub"></div>
-      </div>
-    </div>
-
-    <!-- Boutons d'action -->
     <div class="action-buttons" id="action-buttons">
       <button class="btn-action fold" id="btn-fold" onclick="playerAction('fold')">
         <span class="btn-icon">🏳️</span> Se coucher
@@ -243,10 +235,11 @@
         <div class="raise-input-wrap">
           <input type="number" id="raise-amount" value="20" min="0" step="5" />
           <div class="raise-quick">
-            <button onclick="setRaise(0.5)">½</button>
-            <button onclick="setRaise(1)">1×</button>
-            <button onclick="setRaise(2)">2×</button>
-            <button onclick="setRaiseAllIn()">All-in</button>
+            <button onclick="setQuickBet('third')">⅓</button>
+            <button onclick="setQuickBet('half')">½</button>
+            <button onclick="setQuickBet('twothird')">⅔</button>
+            <button onclick="setQuickBet('pot')">Pot</button>
+            <button onclick="setQuickBet('allin')">All-in</button>
           </div>
         </div>
         <button class="btn-action raise" id="btn-raise" onclick="playerAction('raise')">
@@ -700,44 +693,34 @@
   }
 
   // ══════════════════════════════════════════
-  //  TIMER (cercle SVG basé sur turnDeadline serveur)
+  //  TIMER (compteur numérique simple)
   // ══════════════════════════════════════════
 
   function startServerTimer(deadline) {
     stopTimer();
-    const circle = document.getElementById('timer-circle');
     const text = document.getElementById('timer-text');
-    if (!circle || !text) return;
-
-    const totalDuration = state.turnTimer * 1000;
-    const circumference = 226; // 2 * π * 36
+    if (!text) return;
 
     state.timerInterval = setInterval(() => {
       const now = Date.now();
       const remaining = Math.max(0, deadline - now);
-      const pct = remaining / totalDuration;
-      const offset = circumference * (1 - pct);
+      const secs = Math.ceil(remaining / 1000);
 
-      circle.style.strokeDashoffset = offset;
-      text.textContent = Math.ceil(remaining / 1000);
+      text.textContent = secs;
 
       // Couleurs selon le temps restant
-      circle.classList.remove('warning', 'danger');
       text.classList.remove('warning', 'danger');
-      if (pct < 0.15) {
-        circle.classList.add('danger');
+      if (secs <= 3) {
         text.classList.add('danger');
-      } else if (pct < 0.35) {
-        circle.classList.add('warning');
+      } else if (secs <= 7) {
         text.classList.add('warning');
       }
 
       if (remaining <= 0) {
         stopTimer();
-        // Auto-fold côté client
         if (state.myTurn && state.roomCode) {
           state.myTurn = false;
-          updateTurnUI(false, 'Temps écoulé !');
+          showToast('⏱ Temps écoulé !');
           const checkTimerFn = functions.httpsCallable('checkTimer');
           checkTimerFn({ code: state.roomCode }).catch(() => {});
         }
@@ -750,43 +733,55 @@
       clearInterval(state.timerInterval);
       state.timerInterval = null;
     }
-    // Reset le cercle SVG
-    const circle = document.getElementById('timer-circle');
     const text = document.getElementById('timer-text');
-    if (circle) {
-      circle.style.strokeDashoffset = 0;
-      circle.classList.remove('warning', 'danger');
-    }
     if (text) {
-      text.textContent = state.turnTimer || '20';
+      text.textContent = '--';
       text.classList.remove('warning', 'danger');
     }
   }
 
   // ══════════════════════════════════════════
-  //  RAISE HELPERS
+  //  QUICK BET HELPERS (style poker pro)
   // ══════════════════════════════════════════
-  function setRaise(multiplier) {
+  function setQuickBet(type) {
     const input = document.getElementById('raise-amount');
     if (!input) return;
-    const bigBlind = state.bigBlind || 10;
     const me = state.players.find(p => p.isMe);
     if (!me) return;
-    if (multiplier === 'allin') {
-      input.value = me.stack + (me.bet || 0);
-    } else {
-      input.value = Math.round(state.currentBet + (bigBlind * multiplier));
+    const pot = state.pot || 0;
+    const toCall = state.currentBet - (me.bet || 0);
+    const effectiveStack = me.stack;
+
+    let amount = 0;
+    switch (type) {
+      case 'third':
+        amount = Math.round(pot / 3);
+        break;
+      case 'half':
+        amount = Math.round(pot / 2);
+        break;
+      case 'twothird':
+        amount = Math.round(pot * 2 / 3);
+        break;
+      case 'pot':
+        amount = pot;
+        break;
+      case 'allin':
+        amount = effectiveStack + (me.bet || 0);
+        break;
     }
+
+    // Le raise doit être au moins égal à la grosse blind
+    const minRaise = state.currentBet + (state.bigBlind || 10);
+    if (type !== 'allin' && amount < minRaise) {
+      amount = minRaise;
+    }
+
+    input.value = amount;
     input.focus();
   }
 
-  function setRaiseAllIn() {
-    setRaise('allin');
-  }
-
-  // Helper global pour les boutons de raise
-  window.setRaise = setRaise;
-  window.setRaiseAllIn = setRaiseAllIn;
+  window.setQuickBet = setQuickBet;
 
   // ══════════════════════════════════════════
   //  HAND EVALUATION (client-side, simplified)
