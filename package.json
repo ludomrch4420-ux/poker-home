@@ -5,12 +5,16 @@
   "description": "PokerHome — Texas Hold'em avec Firebase",
   "scripts": {
     "dev": "firebase serve --only hosting,functions",
-    "deploy": "firebase deploy",
+    "deploy": "wrangler deploy",
     "deploy:hosting": "firebase deploy --only hosting",
-    "deploy:functions": "firebase deploy --only functions"
+    "deploy:functions": "firebase deploy --only functions",
+    "preview": "wrangler dev"
   },
   "dependencies": {
     "firebase": "^12.14.0",
     "playwright": "^1.60.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.100.0"
   }
 }
