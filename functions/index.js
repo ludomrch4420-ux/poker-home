@@ -202,11 +202,31 @@ function placeBet(room, player, amount) {
 }
 
 function advanceToNextPlayer(room) {
-  const next = nextConnectedIndex(room, room.currentPlayerIndex);
   const activeConnected = room.players.filter(p => p.isConnected && !p.folded);
   const nonAllIn = activeConnected.filter(p => !p.allIn);
+
+  // S'il ne reste qu'un seul joueur actif ou moins, terminer la main
+  if (activeConnected.length <= 1) {
+    endPhase(room);
+    return;
+  }
+
+  // S'il n'y a plus de joueur non-allIn capable d'agir
+  if (nonAllIn.length <= 1) {
+    // Avancer jusqu'à la river puis showdown
+    const phases = ['preflop', 'flop', 'turn', 'river'];
+    const ci = phases.indexOf(room.phase);
+    for (let i = ci + 1; i < phases.length; i++) {
+      if (phases[i] === 'flop') room.communityCards = deal(room.deck, 3);
+      else room.communityCards.push(...deal(room.deck, 1));
+    }
+    doShowdown(room);
+    return;
+  }
+
+  const next = nextConnectedIndex(room, room.currentPlayerIndex);
   const allMatched = nonAllIn.every(p => p.bet === room.currentBet);
-  const canProceed = nonAllIn.length <= 1 || allMatched;
+  const canProceed = allMatched;
 
   if (next === room.currentPlayerIndex || canProceed) {
     endPhase(room);
@@ -254,6 +274,7 @@ function endPhase(room) {
 }
 
 function firstAfterDealer(room) {
+  // Commencer après le dealer et chercher le premier joueur actif non-allIn
   let idx = (room.dealerIndex + 1) % room.players.length;
   let attempts = 0;
   while (attempts < room.players.length) {
@@ -262,6 +283,12 @@ function firstAfterDealer(room) {
     idx = (idx + 1) % room.players.length;
     attempts++;
   }
+  // Fallback: chercher n'importe quel joueur connecté non-foldé
+  for (let i = 0; i < room.players.length; i++) {
+    if (room.players[i].isConnected && !room.players[i].folded)
+      return i;
+  }
+  // Dernier fallback: le dealer lui-même
   return room.dealerIndex;
 }
 
@@ -273,10 +300,26 @@ function doShowdown(room) {
     .filter(p => !p.folded && p.cards.length === 2);
 
   if (nonFolded.length === 0) {
-    // Tous foldés → le dernier joueur connecté gagne le pot
-    const lastConnected = room.players.find(p => p.isConnected);
-    if (lastConnected) {
-      lastConnected.stack += room.pot;
+    // Tous foldés → chercher le dernier joueur connecté avec des cartes
+    // (celui qui a foldé en dernier mais était actif)
+    let lastIdx = -1;
+    for (let i = 0; i < room.players.length; i++) {
+      if (room.players[i].isConnected && room.players[i].cards.length === 2) {
+        lastIdx = i;
+        break;
+      }
+    }
+    if (lastIdx !== -1) {
+      room.players[lastIdx].stack += room.pot;
+    } else {
+      // Fallback: redistribuer à tous les joueurs connectés
+      const connectedIdxs = room.players.map((p, i) => p.isConnected ? i : -1).filter(i => i >= 0);
+      if (connectedIdxs.length > 0) {
+        const share = Math.floor(room.pot / connectedIdxs.length);
+        for (const i of connectedIdxs) {
+          room.players[i].stack += share;
+        }
+      }
     }
   } else if (nonFolded.length === 1) {
     room.players[nonFolded[0]._realIdx].stack += room.pot;
@@ -657,7 +700,7 @@ exports.nextHand = functions.https.onCall(async (data, context) => {
 
   if (room.players.length < 2) {
     room.phase = 'waiting';
-    room.dealerIndex = -1;
+    room.dealerIndex = room.players.length === 1 ? 0 : -1;
     room.currentPlayerIndex = -1;
     room.turnDeadline = null;
     await setRoomState(code, room);
@@ -731,10 +774,25 @@ exports.leaveRoom = functions.https.onCall(async (data, context) => {
     if (room.dealerIndex >= room.players.length) {
       room.dealerIndex = 0;
     }
+    // Si le joueur qui part était avant le dealer dans la liste, décrémenter
     if (idx < room.dealerIndex) {
       room.dealerIndex--;
     }
-    room.players[room.dealerIndex].isDealer = true;
+    // Si le joueur qui part était le dealer, le nouveau dealer est à la même position
+    // (sauf si c'était le dernier élément, alors index 0)
+    if (idx === room.dealerIndex) {
+      // Le dealer est parti, le nouveau dealer est à la même position
+      // (le joueur suivant a pris sa place dans le splice)
+      // Mais si on a déjà décrémenté ci-dessus, ne pas redécrémenter
+      if (idx < room.players.length) {
+        // Le joueur à l'index actuel est le nouveau dealer
+        // Pas besoin de changer dealerIndex
+      } else {
+        room.dealerIndex = 0;
+      }
+    }
+    // S'assurer qu'il y a exactement un dealer
+    room.players.forEach((p, i) => { p.isDealer = (i === room.dealerIndex); });
   } else {
     room.players[idx].folded = true;
     room.players[idx].isConnected = false;

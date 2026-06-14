@@ -492,6 +492,8 @@ html, body {
 .seat[data-pos="left"] { top: 50%; left: -95px; transform: translateY(-50%); }
 .seat[data-pos="right"] { top: 50%; right: -95px; transform: translateY(50%); }
 
+.seat[data-pos="top"] { top: -75px; left: 50%; transform: translateX(-50%); }
+
 .avatar {
   width: 48px; height: 48px; border-radius: 50%;
   background: linear-gradient(135deg, #1e2244, #12122a);

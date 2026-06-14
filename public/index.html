@@ -517,21 +517,48 @@
 
   function detachListeners() {
     if (state.roomListener && state.roomCode) {
-      db.ref('rooms/' + state.roomCode).off('value', state.roomListener);
+      try {
+        db.ref('rooms/' + state.roomCode).off('value', state.roomListener);
+      } catch (e) {}
       state.roomListener = null;
     }
     if (state.playersListListener && state.roomCode) {
-      db.ref('events/' + state.roomCode).off('child_added', state.playersListListener);
+      try {
+        db.ref('events/' + state.roomCode).off('child_added', state.playersListListener);
+      } catch (e) {}
       state.playersListListener = null;
     }
     stopTimer();
   }
 
   function handleRoomEvent(event) {
-    // Gérer les événements spéciaux si nécessaire
+    if (!event || !event.event) return;
     if (event.event === 'gameStarted') {
       showToast('🎲 La partie commence !');
       document.getElementById('btn-start').style.display = 'none';
+    } else if (event.event === 'playerAction' && event.data) {
+      const d = event.data;
+      if (d.player && d.action) {
+        addLog(d.player, d.action, d.amount || 0);
+      }
+      if (d.roomData) {
+        updateGameState(d.roomData, state.playerId);
+      }
+    } else if (event.event === 'turnExpired' && event.data) {
+      const d = event.data;
+      showToast('⏱ ' + (d.player || 'Un joueur') + ' a été fold (temps écoulé)');
+      if (d.roomData) {
+        updateGameState(d.roomData, state.playerId);
+      }
+    } else if (event.event === 'playerJoined' && event.data) {
+      showToast('👋 ' + (event.data.name || 'Un joueur') + ' a rejoint');
+    } else if (event.event === 'playerLeft' && event.data) {
+      showToast('👋 Un joueur est parti');
+    } else if (event.event === 'newHand') {
+      showToast('🔄 Nouvelle main !');
+      if (event.data?.roomData) {
+        updateGameState(event.data.roomData, state.playerId);
+      }
     }
   }
 
@@ -570,8 +597,8 @@
         playerId: state.playerId,
       });
 
-      if (result.data) {
-        addLog(result.data.player, result.data.action, result.data.amount);
+      if (result.data?.roomData) {
+        updateGameState(result.data.roomData, state.playerId);
       }
     } catch (err) {
       showToast('Erreur : ' + (err.message || 'Action impossible'));
@@ -604,10 +631,8 @@
     if (!gs) return;
     const playerId = myId || state.playerId;
 
-    // Détecter si c'est un vrai changement
-    const stateHash = JSON.stringify(gs);
-    if (state.lastHandState === stateHash) return;
-    state.lastHandState = stateHash;
+    // Note: on ne filtre plus les doublons via hash car ça peut
+    // empêcher la détection de tour après reconnexion
 
     state.pot = gs.pot || 0;
     state.communityCards = gs.communityCards || [];
@@ -658,12 +683,13 @@
     // Mise à jour des infos partie
     document.getElementById('info-current-bet').textContent = state.currentBet;
 
-    // Vérifier si c'est mon tour
-    if (me && !me.folded && gs.currentPlayerIndex !== undefined && gs.players) {
+    // Vérifier si c'est mon tour — utiliser gs.players directement (données fraîches du serveur)
+    if (gs.currentPlayerIndex !== undefined && gs.currentPlayerIndex >= 0 && gs.players && gs.players.length > 0) {
       const currentPlayer = gs.players[gs.currentPlayerIndex];
       if (currentPlayer && currentPlayer.id === playerId && !state.myTurn && state.phase !== 'showdown' && state.phase !== 'waiting') {
         state.myTurn = true;
-        const toCall = state.currentBet - (me.bet || 0);
+        const meInGs = gs.players.find(p => p.isMe);
+        const toCall = state.currentBet - (meInGs?.bet || 0);
         document.getElementById('call-label').textContent = toCall > 0 ? 'Suivre ' + toCall : 'Suivre';
         document.getElementById('btn-call').querySelector('.btn-icon').textContent = toCall > 0 ? '💰' : '✅';
         document.getElementById('raise-amount').value = state.currentBet + (gs.bigBlind || 10);
@@ -825,7 +851,7 @@
   // ══════════════════════════════════════════
   //  SEATS
   // ══════════════════════════════════════════
-  const SEATS = ['bottom', 'top-left', 'top-right', 'left', 'right'];
+  const SEATS = ['bottom', 'top-left', 'top-right', 'left', 'right', 'top'];
 
   function renderSeats(players, currentPlayerIndex) {
     const container = document.getElementById('seats-container');
@@ -891,8 +917,10 @@
   // ══════════════════════════════════════════
   function updateTurnUI(isMyTurn, sub) {
     state.myTurn = isMyTurn;
-    document.getElementById('turn-label').textContent = isMyTurn ? "C'est ton tour !" : 'En attente…';
-    document.getElementById('turn-sub').textContent = sub || '';
+    const turnLabel = document.getElementById('turn-label');
+    const turnSub = document.getElementById('turn-sub');
+    if (turnLabel) turnLabel.textContent = isMyTurn ? "C'est ton tour !" : 'En attente…';
+    if (turnSub) turnSub.textContent = sub || '';
 
     const btns = document.querySelectorAll('.btn-action');
     btns.forEach(btn => {
@@ -905,17 +933,16 @@
   //  CLEANUP ON PAGE UNLOAD
   // ══════════════════════════════════════════
   // Utiliser visibilitychange + beforeunload pour marquer la déconnexion
-  // Note: beforeunload ne peut pas attendre une opération async,
-  // on utilise donc une approche best-effort avec sendBeacon ou sync
-  window.addEventListener('beforeunload', () => {
-    if (state.roomCode && state.playerId) {
-      // Best-effort: utiliser une requête synchrone ou juste laisser le timeout serveur gérer
-      // Le listener temps réel Firebase gère automatiquement la déconnexion via .info/connected
-      db.ref('rooms/' + state.roomCode + '/players').once('value', snap => {
+  window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && state.roomCode && state.playerId) {
+      // Utiliser sendBeacon pour une déconnexion fiable
+      const url = `https://poker-home-app-default-rtdb.europe-west1.firebasedatabase.app/rooms/${state.roomCode}/players.json`;
+      // Trouver l'index du joueur et marquer comme déconnecté via REST API
+      firebase.database().ref('rooms/' + state.roomCode + '/players').once('value', snap => {
         const players = snap.val() || [];
         const idx = players.findIndex(p => p.id === state.playerId);
         if (idx !== -1) {
-          db.ref('rooms/' + state.roomCode + '/players/' + idx + '/isConnected').set(false);
+          firebase.database().ref('rooms/' + state.roomCode + '/players/' + idx + '/isConnected').set(false);
         }
       });
     }
